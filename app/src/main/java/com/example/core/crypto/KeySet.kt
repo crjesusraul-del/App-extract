@@ -26,17 +26,25 @@ class KeySet(
     val titleKeks: Map<Int, ByteArray> = emptyMap(),
     val masterKeys: Map<Int, ByteArray> = emptyMap(),
     val titleKeys: MutableMap<String, ByteArray> = mutableMapOf(),
+    val encryptedTitleKeys: MutableMap<String, ByteArray> = mutableMapOf(),
     val rawKeyCount: Int = 0
 ) {
     fun getKeyAreaKeyApp(generation: Int): ByteArray? = keyAreaKeyApplication[generation]
 
     fun getTitleKek(generation: Int): ByteArray? = titleKeks[generation]
 
-    fun getTitleKey(rightsIdHex: String): ByteArray? =
+    fun getPlainTitleKey(rightsIdHex: String): ByteArray? =
         titleKeys[rightsIdHex.lowercase(Locale.US)]
 
-    fun putTitleKey(rightsIdHex: String, decryptedOrEncryptedKey: ByteArray) {
-        titleKeys[rightsIdHex.lowercase(Locale.US)] = decryptedOrEncryptedKey
+    fun getEncryptedTitleKey(rightsIdHex: String): ByteArray? =
+        encryptedTitleKeys[rightsIdHex.lowercase(Locale.US)]
+
+    fun putPlainTitleKey(rightsIdHex: String, plainKey: ByteArray) {
+        titleKeys[rightsIdHex.lowercase(Locale.US)] = plainKey
+    }
+
+    fun putEncryptedTitleKey(rightsIdHex: String, encryptedKey: ByteArray) {
+        encryptedTitleKeys[rightsIdHex.lowercase(Locale.US)] = encryptedKey
     }
 
     fun summarize(): KeyValidationSummary {

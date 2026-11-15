@@ -53,11 +53,17 @@ class RomFsReader private constructor(
 
             val collected = mutableListOf<RomFsFileEntry>()
             val visitedDirs = HashSet<Int>()
+            val queue = ArrayDeque<Pair<Int, String>>()
+            if (dirMeta.size >= 0x18) {
+                queue.addLast(0 to "")
+            }
 
-            fun walkDirectory(dirOffset: Int, parentPath: String) {
-                if (dirOffset < 0 || dirOffset + 0x18 > dirMeta.size || !visitedDirs.add(dirOffset)) return
-                val childDir = BinaryUtils.readU32LE(dirMeta, dirOffset + 0x08)
+            while (queue.isNotEmpty()) {
+                val (dirOffset, parentPath) = queue.removeFirst()
+                if (dirOffset < 0 || dirOffset + 0x18 > dirMeta.size || !visitedDirs.add(dirOffset)) continue
+
                 val nextSibling = BinaryUtils.readU32LE(dirMeta, dirOffset + 0x04)
+                val childDir = BinaryUtils.readU32LE(dirMeta, dirOffset + 0x08)
                 val firstFile = BinaryUtils.readU32LE(dirMeta, dirOffset + 0x0C)
                 val nameLen = BinaryUtils.readU32LE(dirMeta, dirOffset + 0x14).toInt()
 
@@ -73,7 +79,7 @@ class RomFsReader private constructor(
                     else -> "$parentPath/$dirName"
                 }
 
-                // Walk files in this directory
+                // Walk files in this directory iteratively
                 var fileOff = firstFile
                 val visitedFiles = HashSet<Int>()
                 while (fileOff != INVALID_ENTRY && fileOff < fileMeta.size) {
@@ -98,15 +104,11 @@ class RomFsReader private constructor(
                 }
 
                 if (childDir != INVALID_ENTRY && childDir < dirMeta.size) {
-                    walkDirectory(childDir.toInt(), currentPath)
+                    queue.addLast(childDir.toInt() to currentPath)
                 }
                 if (nextSibling != INVALID_ENTRY && nextSibling < dirMeta.size) {
-                    walkDirectory(nextSibling.toInt(), parentPath)
+                    queue.addLast(nextSibling.toInt() to parentPath)
                 }
-            }
-
-            if (dirMeta.size >= 0x18) {
-                walkDirectory(0, "")
             }
 
             return RomFsReader(source, dataOffset, collected)

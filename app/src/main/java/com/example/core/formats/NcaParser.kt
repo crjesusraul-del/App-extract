@@ -83,14 +83,12 @@ class NcaFile private constructor(
 
     fun resolveSectionKey(keys: KeySet): ByteArray {
         if (usesRightsId) {
-            val encOrPlainTitleKey = keys.getTitleKey(rightsIdHex)
+            keys.getPlainTitleKey(rightsIdHex)?.let { return it }
+            val encTitleKey = keys.getEncryptedTitleKey(rightsIdHex)
                 ?: throw IOException("Missing titlekey for RightsId $rightsIdHex. Ensure NSP ticket or title.keys is present.")
             val titleKek = keys.getTitleKek(keyGeneration)
-            return if (titleKek != null) {
-                SwitchCrypto.aes128EcbDecrypt(titleKek, encOrPlainTitleKey)
-            } else {
-                encOrPlainTitleKey
-            }
+                ?: throw IOException("Missing titlekek_%02x in prod.keys to decrypt NSP ticket.".format(keyGeneration))
+            return SwitchCrypto.aes128EcbDecrypt(titleKek, encTitleKey)
         }
         val keyAreaKey = keys.getKeyAreaKeyApp(keyGeneration)
             ?: throw IOException("Missing key_area_key_application_%02x in prod.keys".format(keyGeneration))
@@ -209,7 +207,7 @@ class NcaFile private constructor(
                 if (endOffset <= startOffset) continue
 
                 val fsHeaderOff = 0x400 + i * 0x200
-                val fsType = NcaFsType.fromCode(dec[fsHeaderOff + 0x03].toInt() and 0xFF)
+                val fsType = NcaFsType.fromCode(dec[fsHeaderOff + 0x02].toInt() and 0xFF)
                 val encType = NcaEncryptionType.fromCode(dec[fsHeaderOff + 0x04].toInt() and 0xFF)
                 val ctrNonce = dec.copyOfRange(fsHeaderOff + 0x140, fsHeaderOff + 0x148)
 

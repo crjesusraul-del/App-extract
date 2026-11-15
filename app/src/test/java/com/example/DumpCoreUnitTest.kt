@@ -324,7 +324,7 @@ class DumpCoreUnitTest {
 
             val fsHeaderOff = 0x400 + idx * 0x200
             header[fsHeaderOff + 0x02] = fsType.code.toByte()
-            header[fsHeaderOff + 0x03] = fsType.code.toByte()
+            header[fsHeaderOff + 0x03] = if (fsType == NcaFsType.PFS0) 2.toByte() else 3.toByte()
             header[fsHeaderOff + 0x04] = NcaEncryptionType.AES_CTR.code.toByte()
             val ctrNonce = byteArrayOf(1, 2, 3, 4, 5, 6, 7, (idx + 1).toByte())
             System.arraycopy(ctrNonce, 0, header, fsHeaderOff + 0x140, 8)

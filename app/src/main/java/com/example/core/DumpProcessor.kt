@@ -389,7 +389,7 @@ object DumpProcessor {
             runCatching {
                 val tik = TicketParser.parse(opener(tikEntry))
                 if (!tik.isPersonalized) {
-                    keys.putTitleKey(tik.rightsIdHex, tik.titleKeyBytes)
+                    keys.putEncryptedTitleKey(tik.rightsIdHex, tik.titleKeyBytes)
                 }
             }
         }

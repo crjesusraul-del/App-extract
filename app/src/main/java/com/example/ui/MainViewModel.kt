@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -91,10 +92,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
+    private var didAutoScan = false
+
     init {
         viewModelScope.launch {
             setupConfig.collectLatest { cfg ->
-                _keySummary.value = repo.validateKeys(cfg)
+                val summary = repo.validateKeys(cfg)
+                _keySummary.value = summary
+                if (!didAutoScan && cfg.isMinimumSetupComplete && summary.isUsableForExtraction) {
+                    val cached = prefs.cachedLibraryFlow.first()
+                    if (cached.lastScannedEpochMs == 0L) {
+                        didAutoScan = true
+                        refreshLibrary()
+                    } else {
+                        didAutoScan = true
+                    }
+                }
             }
         }
     }

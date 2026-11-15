@@ -35,7 +35,7 @@ class PreferencesRepository(private val context: Context) {
         val LOOSE_FILE_URIS = stringSetPreferencesKey("loose_file_uris")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
-        val LIBRARY_CACHE_JSON = stringPreferencesKey("library_cache_json")
+        val LIBRARY_CACHE_JSON = stringPreferencesKey("library_cache_v2_json")
     }
 
     val setupConfigFlow: Flow<SetupConfig> = context.nxDumpDataStore.data.map { prefs ->
