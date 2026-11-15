@@ -7,13 +7,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.FolderCopy
@@ -23,9 +23,12 @@ import androidx.compose.material.icons.outlined.FolderCopy
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -148,38 +151,59 @@ fun NxDumpApp(viewModel: MainViewModel) {
 
         Scaffold(
             modifier = Modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 if (showChromeNav && !useRail) {
-                    NavigationBar(
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
-                    ) {
-                        val activeJobsCount = if (queueState.activeJob != null) 1 + queueState.pendingCount else 0
-                        navItems().forEach { (route, label, icons) ->
-                            val selected = currentRoute == route
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    navController.navigate(route) {
-                                        popUpTo(ROUTE_LIBRARY) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = {
-                                    NavTabIcon(
-                                        route = route,
-                                        label = label,
-                                        selected = selected,
-                                        filledIcon = icons.first,
-                                        outlinedIcon = icons.second,
-                                        activeJobsCount = activeJobsCount
-                                    )
-                                },
-                                label = { Text(label) },
-                                modifier = Modifier.testTag("nav_${route}_tab")
-                            )
+                    Column {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 0.dp,
+                            windowInsets = WindowInsets.navigationBars
+                        ) {
+                            val activeJobsCount = if (queueState.activeJob != null) 1 + queueState.pendingCount else 0
+                            navItems().forEach { (route, label, icons) ->
+                                val selected = currentRoute == route
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        navController.navigate(route) {
+                                            popUpTo(ROUTE_LIBRARY) { saveState = true }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    },
+                                    icon = {
+                                        NavTabIcon(
+                                            route = route,
+                                            label = label,
+                                            selected = selected,
+                                            filledIcon = icons.first,
+                                            outlinedIcon = icons.second,
+                                            activeJobsCount = activeJobsCount
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    ),
+                                    modifier = Modifier.testTag("nav_${route}_tab")
+                                )
+                            }
                         }
                     }
                 }
@@ -191,7 +215,9 @@ fun NxDumpApp(viewModel: MainViewModel) {
                     .padding(innerPadding)
             ) {
                 if (showChromeNav && useRail) {
-                    NavigationRail {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ) {
                         val activeJobsCount = if (queueState.activeJob != null) 1 + queueState.pendingCount else 0
                         navItems().forEach { (route, label, icons) ->
                             val selected = currentRoute == route

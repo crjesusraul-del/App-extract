@@ -1,9 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,32 +20,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.CreateNewFolder
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.VpnKey
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,11 +43,10 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.core.crypto.KeyValidationSummary
 import com.example.data.SetupConfig
+import com.example.ui.components.GroupedSection
+import com.example.ui.components.semanticSuccessColor
+import com.example.ui.components.semanticWarningColor
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.NxAmber
-import com.example.ui.theme.NxCrimson
-import com.example.ui.theme.NxCyan
-import com.example.ui.theme.NxEmerald
 
 @Composable
 fun SetupWizardScreen(
@@ -73,85 +60,87 @@ fun SetupWizardScreen(
     onContinue: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val step1Ready = keySummary.isUsableForExtraction
+    val step2Ready = config.titleKeysUri != null
+    val step3Ready = !config.gameDirUri.isNullOrBlank()
+    val step4Ready = !config.outputDirUri.isNullOrBlank() && config.outputDirRestrictedWarning == null
+    val completedCount = listOf(step1Ready, step2Ready, step3Ready, step4Ready).count { it }
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
             modifier = Modifier
-                .widthIn(max = 680.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             item {
-                // Hero banner card with generated artwork
-                Card(
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Box(
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        ) {
+                            Text(
+                                text = "nx",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = "$completedCount / 4 ready",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Text(
+                        text = stringResource(R.string.setup_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = stringResource(R.string.setup_subtitle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // 4-segment readiness meter
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(176.dp)
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.img_setup_hero_1794703306183),
-                            contentDescription = "nxdump Switch cartridge extraction artwork",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent,
-                                            Color(0xD90E1116)
-                                        )
-                                    )
-                                )
-                        )
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(18.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = NxCrimson
-                                ) {
-                                    Text(
-                                        text = "NXDUMP",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontFamily = JetBrainsMonoFontFamily,
-                                            fontWeight = FontWeight.Bold
-                                        ),
-                                        color = Color.White,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "XCI • NSP • NCA • BKTR",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = NxCyan
-                                )
+                        listOf(step1Ready, step2Ready, step3Ready, step4Ready).forEachIndexed { idx, ready ->
+                            val isRequired = idx != 1
+                            val barColor = when {
+                                ready -> semanticSuccessColor()
+                                !isRequired -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                else -> MaterialTheme.colorScheme.surfaceContainerHigh
                             }
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = stringResource(R.string.setup_title),
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = Color.White
-                            )
-                            Text(
-                                text = stringResource(R.string.setup_subtitle),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFCBD5E1),
-                                maxLines = 2
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(4.dp)
+                                    .clip(CircleShape)
+                                    .background(barColor)
                             )
                         }
                     }
@@ -159,121 +148,125 @@ fun SetupWizardScreen(
             }
 
             item {
-                SetupStepCard(
-                    stepNumber = 1,
-                    title = stringResource(R.string.step_prod_keys),
-                    subtitle = if (config.prodKeysName != null) {
-                        "${config.prodKeysName} • ${keySummary.totalKeysCount} keys (${keySummary.masterKeyCount} master)"
-                    } else {
-                        "Required for AES-XTS header & key area decryption"
-                    },
-                    icon = Icons.Rounded.VpnKey,
-                    isCompleted = keySummary.isUsableForExtraction,
-                    accentColor = NxCrimson,
-                    buttonLabel = if (config.prodKeysUri == null) stringResource(R.string.action_select_file) else stringResource(R.string.action_replace_file),
-                    testTag = "setup_prod_keys_btn",
-                    onClick = onPickProdKeys,
-                    warningText = if (config.prodKeysUri != null && keySummary.warnings.isNotEmpty()) {
-                        keySummary.warnings.first()
-                    } else null
-                )
-            }
-
-            item {
-                SetupStepCard(
-                    stepNumber = 2,
-                    title = stringResource(R.string.step_title_keys),
-                    subtitle = if (config.titleKeysName != null) {
-                        "${config.titleKeysName} • ${keySummary.titleKeysCount} titlekeys loaded"
-                    } else {
-                        "Optional — NSP common tickets are also read automatically"
-                    },
-                    icon = Icons.Rounded.Key,
-                    isCompleted = config.titleKeysUri != null,
-                    accentColor = NxCyan,
-                    buttonLabel = if (config.titleKeysUri == null) stringResource(R.string.action_select_file) else stringResource(R.string.action_replace_file),
-                    secondaryActionLabel = if (config.titleKeysUri != null) "Clear" else null,
-                    onSecondaryClick = onClearTitleKeys,
-                    testTag = "setup_title_keys_btn",
-                    onClick = onPickTitleKeys
-                )
-            }
-
-            item {
-                SetupStepCard(
-                    stepNumber = 3,
-                    title = stringResource(R.string.step_game_dir),
-                    subtitle = config.gameDirName ?: "Folder containing .xci, .nsp, or .nca dumps & updates",
-                    icon = Icons.Rounded.FolderOpen,
-                    isCompleted = !config.gameDirUri.isNullOrBlank(),
-                    accentColor = NxCrimson,
-                    buttonLabel = if (config.gameDirUri == null) stringResource(R.string.action_select_folder) else stringResource(R.string.action_change_folder),
-                    testTag = "setup_game_dir_btn",
-                    onClick = onPickGameDir
-                )
-            }
-
-            item {
-                SetupStepCard(
-                    stepNumber = 4,
-                    title = stringResource(R.string.step_output_dir),
-                    subtitle = config.outputDirName ?: "Dedicated subfolder for extracted ExeFS & RomFS files",
-                    icon = Icons.Rounded.CreateNewFolder,
-                    isCompleted = !config.outputDirUri.isNullOrBlank() && config.outputDirRestrictedWarning == null,
-                    accentColor = NxCyan,
-                    buttonLabel = if (config.outputDirUri == null) stringResource(R.string.action_select_folder) else stringResource(R.string.action_change_folder),
-                    testTag = "setup_output_dir_btn",
-                    onClick = onPickOutputDir,
-                    warningText = config.outputDirRestrictedWarning
-                )
-            }
-
-            item {
-                Spacer(Modifier.height(4.dp))
-                Button(
-                    onClick = onContinue,
-                    enabled = config.isMinimumSetupComplete && keySummary.isUsableForExtraction,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .testTag("setup_continue_btn"),
-                    shape = MaterialTheme.shapes.medium,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
+                GroupedSection {
+                    SetupStepRow(
+                        stepCode = "01",
+                        title = stringResource(R.string.step_prod_keys),
+                        subtitle = if (config.prodKeysName != null) {
+                            "${config.prodKeysName} • ${keySummary.totalKeysCount} keys (${keySummary.masterKeyCount} master)"
+                        } else {
+                            "AES-XTS header & NCA key area decryption"
+                        },
+                        isCompleted = step1Ready,
+                        buttonLabel = if (config.prodKeysUri == null) stringResource(R.string.action_select_file) else stringResource(R.string.action_replace_file),
+                        testTag = "setup_prod_keys_btn",
+                        onClick = onPickProdKeys,
+                        warningText = if (config.prodKeysUri != null && keySummary.warnings.isNotEmpty()) {
+                            keySummary.warnings.first()
+                        } else null
                     )
-                ) {
-                    Text(
-                        text = stringResource(R.string.action_continue_library),
-                        style = MaterialTheme.typography.titleSmall
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
-                        contentDescription = null
+
+                    SetupStepRow(
+                        stepCode = "02",
+                        title = stringResource(R.string.step_title_keys),
+                        subtitle = if (config.titleKeysName != null) {
+                            "${config.titleKeysName} • ${keySummary.titleKeysCount} entries loaded"
+                        } else {
+                            "Optional — NSP common tickets are parsed automatically"
+                        },
+                        isCompleted = step2Ready,
+                        buttonLabel = if (config.titleKeysUri == null) stringResource(R.string.action_select_file) else stringResource(R.string.action_replace_file),
+                        secondaryActionLabel = if (config.titleKeysUri != null) "Clear" else null,
+                        onSecondaryClick = onClearTitleKeys,
+                        testTag = "setup_title_keys_btn",
+                        onClick = onPickTitleKeys
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    SetupStepRow(
+                        stepCode = "03",
+                        title = stringResource(R.string.step_game_dir),
+                        subtitle = config.gameDirName ?: "Folder containing .xci, .nsp, or .nca dumps",
+                        isCompleted = step3Ready,
+                        buttonLabel = if (config.gameDirUri == null) stringResource(R.string.action_select_folder) else stringResource(R.string.action_change_folder),
+                        testTag = "setup_game_dir_btn",
+                        onClick = onPickGameDir
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    SetupStepRow(
+                        stepCode = "04",
+                        title = stringResource(R.string.step_output_dir),
+                        subtitle = config.outputDirName ?: "Dedicated subfolder for extracted files",
+                        isCompleted = step4Ready,
+                        buttonLabel = if (config.outputDirUri == null) stringResource(R.string.action_select_folder) else stringResource(R.string.action_change_folder),
+                        testTag = "setup_output_dir_btn",
+                        onClick = onPickOutputDir,
+                        warningText = config.outputDirRestrictedWarning
                     )
                 }
-                if (!config.isMinimumSetupComplete || !keySummary.isUsableForExtraction) {
-                    Text(
-                        text = "Configure valid prod.keys, Game Library Folder, and Output Folder to unlock extraction.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)
-                    )
+            }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onContinue,
+                        enabled = config.isMinimumSetupComplete && keySummary.isUsableForExtraction,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("setup_continue_btn"),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.action_continue_library),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    if (!config.isMinimumSetupComplete || !keySummary.isUsableForExtraction) {
+                        Text(
+                            text = "Select valid prod.keys, a game folder, and a dedicated output subfolder to continue.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
             }
         }
     }
 }
 
 @Composable
-private fun SetupStepCard(
-    stepNumber: Int,
+private fun SetupStepRow(
+    stepCode: String,
     title: String,
     subtitle: String,
-    icon: ImageVector,
     isCompleted: Boolean,
-    accentColor: Color,
     buttonLabel: String,
     testTag: String,
     onClick: () -> Unit,
@@ -281,114 +274,111 @@ private fun SetupStepCard(
     onSecondaryClick: (() -> Unit)? = null,
     warningText: String? = null
 ) {
-    val borderColor = when {
-        warningText != null -> NxAmber.copy(alpha = 0.7f)
-        isCompleted -> NxEmerald.copy(alpha = 0.55f)
-        else -> MaterialTheme.colorScheme.outlineVariant
-    }
+    val successColor = semanticSuccessColor()
+    val warnColor = semanticWarningColor()
 
-    Card(
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, borderColor, MaterialTheme.shapes.medium)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isCompleted) NxEmerald.copy(alpha = 0.16f)
-                            else accentColor.copy(alpha = 0.14f)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isCompleted) Icons.Rounded.CheckCircle else icon,
-                        contentDescription = null,
-                        tint = if (isCompleted) NxEmerald else accentColor,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "STEP $stepNumber",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = accentColor
-                    )
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            AnimatedVisibility(visible = warningText != null) {
-                if (warningText != null) {
-                    Surface(
-                        color = NxAmber.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.WarningAmber,
-                                contentDescription = "Warning",
-                                tint = NxAmber,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = warningText,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
+    Column(modifier = Modifier.padding(16.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (isCompleted) successColor.copy(alpha = 0.16f)
+                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                if (secondaryActionLabel != null && onSecondaryClick != null) {
-                    OutlinedButton(
-                        onClick = onSecondaryClick,
-                        modifier = Modifier.padding(end = 8.dp)
+                if (isCompleted) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = "Configured",
+                        tint = successColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Text(
+                        text = stepCode,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = warningText != null) {
+            if (warningText != null) {
+                Surface(
+                    color = warnColor.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(secondaryActionLabel)
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = "Warning",
+                            tint = warnColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = warningText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
-                FilledTonalButton(
-                    onClick = onClick,
-                    modifier = Modifier.testTag(testTag)
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (secondaryActionLabel != null && onSecondaryClick != null) {
+                TextButton(
+                    onClick = onSecondaryClick,
+                    modifier = Modifier.padding(end = 6.dp)
                 ) {
-                    Text(buttonLabel)
+                    Text(secondaryActionLabel)
                 }
+            }
+            FilledTonalButton(
+                onClick = onClick,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.testTag(testTag)
+            ) {
+                Text(
+                    text = buttonLabel,
+                    style = MaterialTheme.typography.labelLarge
+                )
             }
         }
     }

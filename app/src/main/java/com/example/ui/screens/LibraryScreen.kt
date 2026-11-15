@@ -1,8 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,9 +21,12 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -34,16 +35,16 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,10 +56,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -67,11 +69,12 @@ import com.example.data.IndexedGame
 import com.example.data.SetupConfig
 import com.example.ui.LibraryUiState
 import com.example.ui.components.FormatBadge
+import com.example.ui.components.GameCardSchematicGraphic
 import com.example.ui.components.GameIconBox
+import com.example.ui.components.GroupedSection
 import com.example.ui.components.PillTag
+import com.example.ui.components.semanticWarningColor
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.NxAmber
-import com.example.ui.theme.NxCyan
 
 @Composable
 fun LibraryScreen(
@@ -91,14 +94,18 @@ fun LibraryScreen(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
-            ExtendedFloatingActionButton(
+            FloatingActionButton(
                 onClick = onAddLooseFile,
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text(stringResource(R.string.action_add_file)) },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.testTag("library_add_file_fab")
-            )
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = stringResource(R.string.action_add_file)
+                )
+            }
         }
     ) { innerPadding ->
         BoxWithConstraints(
@@ -113,13 +120,13 @@ fun LibraryScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp),
+                        .padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Game Library",
+                            text = "Library",
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.onBackground
                         )
@@ -139,7 +146,8 @@ fun LibraryScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Tune,
-                                contentDescription = "Open Setup Wizard"
+                                contentDescription = "Open Setup Wizard",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         IconButton(
@@ -149,7 +157,8 @@ fun LibraryScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
-                                contentDescription = stringResource(R.string.action_refresh)
+                                contentDescription = stringResource(R.string.action_refresh),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -157,43 +166,47 @@ fun LibraryScreen(
 
                 if (state.isScanning) {
                     LinearProgressIndicator(
+                        strokeCap = StrokeCap.Round,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+                            .padding(horizontal = 20.dp, vertical = 2.dp)
                     )
                 }
 
-                // Search & Format chips
-                OutlinedTextField(
-                    value = state.searchQuery,
-                    onValueChange = onSearchChange,
-                    placeholder = { Text("Search title, filename, or TitleID...") },
-                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (state.searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { onSearchChange("") }) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Clear search")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.medium,
+                // Sleek capsule search bar
+                LibrarySearchBar(
+                    query = state.searchQuery,
+                    onQueryChange = onSearchChange,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .testTag("library_search_input")
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
                 )
 
+                // Format filters
                 val filters = listOf("ALL", "XCI", "NSP", "NCA")
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filters) { f ->
+                        val selected = state.selectedFormatFilter == f
                         FilterChip(
-                            selected = state.selectedFormatFilter == f,
+                            selected = selected,
                             onClick = { onFormatFilterChange(f) },
-                            label = { Text(if (f == "ALL") "All Formats" else f) },
+                            label = {
+                                Text(
+                                    text = if (f == "ALL") "All" else f,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            },
+                            border = null,
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                selectedLabelColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = CircleShape,
                             modifier = Modifier.testTag("filter_chip_${f.lowercase()}")
                         )
                     }
@@ -225,14 +238,14 @@ fun LibraryScreen(
                         onAddLooseFile = onAddLooseFile,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 24.dp)
+                            .padding(horizontal = 28.dp)
                     )
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(columns),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 96.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(state.filteredGames, key = { it.id }) { game ->
@@ -259,22 +272,91 @@ fun LibraryScreen(
 }
 
 @Composable
+private fun LibrarySearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.height(48.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = "Search title, filename, or TitleID",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("library_search_input")
+                )
+            }
+            if (query.isNotEmpty()) {
+                IconButton(
+                    onClick = { onQueryChange("") },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Clear search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun GameLibraryCard(
     game: IndexedGame,
     onClick: () -> Unit
 ) {
-    Card(
+    val warnColor = semanticWarningColor()
+
+    Surface(
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 1.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .clip(MaterialTheme.shapes.medium)
             .clickable(onClick = onClick)
             .testTag("game_card_${game.titleIdHex}")
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -284,29 +366,24 @@ private fun GameLibraryCard(
                 size = 64.dp
             )
 
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FormatBadge(format = game.format)
                     Text(
-                        text = game.titleIdHex,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
+                        text = game.titleName,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    FormatBadge(format = game.format)
                 }
-
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    text = game.titleName,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
 
                 Text(
                     text = "${game.publisher} • ${BinaryUtils.formatBytes(game.fileSizeBytes)}",
@@ -316,12 +393,21 @@ private fun GameLibraryCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(Modifier.height(6.dp))
-
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Text(
+                        text = game.titleIdHex,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "•",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
                     PillTag(
                         text = "v${game.displayVersion}",
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -330,15 +416,15 @@ private fun GameLibraryCard(
                     if (game.matchedUpdates.isNotEmpty() && !game.isUpdateOnlyWithoutBase) {
                         val latest = game.matchedUpdates.first()
                         PillTag(
-                            text = "+ Update v${latest.displayVersion}",
-                            containerColor = NxCyan.copy(alpha = 0.16f),
-                            contentColor = NxCyan
+                            text = "+ v${latest.displayVersion}",
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                     } else if (game.isUpdateOnlyWithoutBase) {
                         PillTag(
-                            text = "Base dump needed",
-                            containerColor = NxAmber.copy(alpha = 0.16f),
-                            contentColor = NxAmber
+                            text = "Base needed",
+                            containerColor = warnColor.copy(alpha = 0.16f),
+                            contentColor = warnColor
                         )
                     }
                     if (game.isLooseFile) {
@@ -351,6 +437,13 @@ private fun GameLibraryCard(
                     }
                 }
             }
+
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }
@@ -361,61 +454,59 @@ private fun UnsupportedFilesCard(
     expanded: Boolean,
     onToggle: () -> Unit
 ) {
-    Card(
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, NxAmber.copy(alpha = 0.45f), MaterialTheme.shapes.medium)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+    val warnColor = semanticWarningColor()
+
+    GroupedSection(modifier = Modifier.padding(top = 4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggle),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.WarningAmber,
-                        contentDescription = null,
-                        tint = NxAmber,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "${entries.size} Skipped / Unsupported Files",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
                 Icon(
-                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                    contentDescription = if (expanded) "Collapse" else "Expand"
+                    imageVector = Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = warnColor,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = "${entries.size} Skipped Files",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
+            Icon(
+                imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
-            AnimatedVisibility(visible = expanded) {
-                Column(
-                    modifier = Modifier.padding(top = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    entries.forEach { item ->
-                        Column {
-                            Text(
-                                text = item.fileName,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = item.reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                entries.forEach { item ->
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Text(
+                            text = item.fileName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = item.reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -437,40 +528,35 @@ private fun EmptyLibraryState(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Image(
-            painter = painterResource(id = R.drawable.img_empty_library_1794703306709),
-            contentDescription = "Empty Switch dump library illustration",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(210.dp, 158.dp)
-                .clip(MaterialTheme.shapes.large)
-        )
-        Spacer(Modifier.height(16.dp))
+        GameCardSchematicGraphic()
+        Spacer(Modifier.height(20.dp))
         Text(
-            text = if (hasConfig) "No Indexed Dumps Yet" else "Setup Required",
+            text = if (hasConfig) "No Dumps Indexed" else "Setup Required",
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(6.dp))
         Text(
             text = if (hasUnsupported) {
-                "Some files were skipped (NSZ/XCZ compressed or missing keys). Check skipped files or add an uncompressed NSP/XCI/NCA."
+                "Some files in this folder were skipped (NSZ/XCZ compressed or missing keys). Check skipped files or add an uncompressed dump."
             } else if (hasConfig) {
-                "Place uncompressed .xci, .nsp, or .nca files in your selected game folder, tap Refresh, or use Add file to import a dump."
+                "Place uncompressed .xci, .nsp, or .nca files in your library folder, refresh, or import a single dump with +."
             } else {
-                "Configure your prod.keys, game folder, and output folder first."
+                "Configure prod.keys, a game folder, and an output folder to get started."
             },
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (!hasConfig) {
-                OutlinedButton(onClick = onOpenSetup) {
+                FilledTonalButton(onClick = onOpenSetup) {
                     Text("Open Setup")
                 }
             } else {
-                OutlinedButton(onClick = onRefresh) {
+                FilledTonalButton(onClick = onRefresh) {
                     Text("Scan Folder")
                 }
                 OutlinedButton(onClick = onAddLooseFile) {

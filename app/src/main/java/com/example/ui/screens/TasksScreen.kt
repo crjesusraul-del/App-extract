@@ -15,16 +15,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.HourglassEmpty
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,11 +42,12 @@ import com.example.core.io.BinaryUtils
 import com.example.data.ExtractionProgress
 import com.example.data.ExtractionStatus
 import com.example.service.ExtractionQueueState
+import com.example.ui.components.GroupedSection
 import com.example.ui.components.PillTag
+import com.example.ui.components.SectionLabel
+import com.example.ui.components.semanticSuccessColor
+import com.example.ui.components.semanticWarningColor
 import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.NxAmber
-import com.example.ui.theme.NxCyan
-import com.example.ui.theme.NxEmerald
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,20 +65,22 @@ fun TasksScreen(
     ) {
         LazyColumn(
             modifier = Modifier
-                .widthIn(max = 720.dp)
+                .widthIn(max = 700.dp)
                 .fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
-                            text = "Extraction Tasks",
+                            text = "Tasks",
                             style = MaterialTheme.typography.headlineMedium,
                             color = MaterialTheme.colorScheme.onBackground
                         )
@@ -85,7 +88,7 @@ fun TasksScreen(
                             text = if (queueState.activeJob != null) {
                                 "1 active • ${queueState.pendingCount} queued"
                             } else {
-                                "Idle • ${queueState.history.size} completed jobs"
+                                "Idle • ${queueState.history.size} recent jobs"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -98,7 +101,8 @@ fun TasksScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.DeleteSweep,
-                                contentDescription = "Clear extraction history"
+                                contentDescription = "Clear extraction history",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -115,31 +119,26 @@ fun TasksScreen(
                 }
             } else {
                 item {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-                    ) {
+                    GroupedSection {
                         Row(
                             modifier = Modifier.padding(18.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.HourglassTop,
+                                imageVector = Icons.Rounded.HourglassEmpty,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
                             )
-                            Column {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
                                     text = "No Active Extraction",
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Pick any game in your Library to unpack ExeFS or RomFS.",
+                                    text = "Select any title in Library to extract ExeFS, RomFS, or raw NCAs.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -151,15 +150,20 @@ fun TasksScreen(
 
             if (queueState.history.isNotEmpty()) {
                 item {
-                    Text(
-                        text = "Recent Jobs",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-                items(queueState.history, key = { it.jobId }) { item ->
-                    HistoryTaskCard(job = item)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionLabel(text = "Recent Jobs")
+                        GroupedSection {
+                            queueState.history.forEachIndexed { idx, item ->
+                                HistoryTaskRow(job = item)
+                                if (idx < queueState.history.lastIndex) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -172,12 +176,14 @@ private fun ActiveExtractionCard(
     pendingCount: Int,
     onCancel: () -> Unit
 ) {
-    Card(
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    val successColor = semanticSuccessColor()
+
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.5.dp, NxCyan.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), MaterialTheme.shapes.large)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -194,35 +200,37 @@ private fun ActiveExtractionCard(
                 ) {
                     PillTag(
                         text = job.target.label,
-                        containerColor = NxCyan.copy(alpha = 0.16f),
-                        contentColor = NxCyan
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        contentColor = MaterialTheme.colorScheme.primary
                     )
                     if (job.mergedUpdateVersion != null) {
                         PillTag(
                             text = "Merged v${job.mergedUpdateVersion}",
-                            containerColor = NxEmerald.copy(alpha = 0.16f),
-                            contentColor = NxEmerald
+                            containerColor = successColor.copy(alpha = 0.16f),
+                            contentColor = successColor
                         )
                     }
                     if (pendingCount > 0) {
                         PillTag(
                             text = "+$pendingCount queued",
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
                 Text(
                     text = "${(job.fraction * 100).toInt()}%",
-                    style = MaterialTheme.typography.titleSmall.copy(fontFamily = JetBrainsMonoFontFamily),
-                    color = NxCyan
+                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMonoFontFamily),
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
 
             Text(
                 text = job.gameTitle,
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
             Text(
@@ -234,15 +242,17 @@ private fun ActiveExtractionCard(
             if (job.totalFiles > 0) {
                 LinearProgressIndicator(
                     progress = { job.fraction },
+                    strokeCap = StrokeCap.Round,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
+                        .height(6.dp)
                 )
             } else {
                 LinearProgressIndicator(
+                    strokeCap = StrokeCap.Round,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(8.dp)
+                        .height(6.dp)
                 )
             }
 
@@ -262,18 +272,20 @@ private fun ActiveExtractionCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val counts = if (job.totalFiles > 0) {
-                    "${job.filesDone} / ${job.totalFiles} files • ${BinaryUtils.formatBytes(job.bytesDone)} / ${BinaryUtils.formatBytes(job.totalBytes)}"
+                    "${job.filesDone}/${job.totalFiles} files • ${BinaryUtils.formatBytes(job.bytesDone)} / ${BinaryUtils.formatBytes(job.totalBytes)}"
                 } else {
                     "Preparing..."
                 }
                 Text(
                     text = counts,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = JetBrainsMonoFontFamily),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
                 )
 
                 OutlinedButton(
                     onClick = onCancel,
+                    shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     modifier = Modifier.testTag("task_cancel_btn")
                 ) {
@@ -287,75 +299,80 @@ private fun ActiveExtractionCard(
 }
 
 @Composable
-private fun HistoryTaskCard(job: ExtractionProgress) {
+private fun HistoryTaskRow(job: ExtractionProgress) {
+    val successColor = semanticSuccessColor()
+    val warnColor = semanticWarningColor()
+
     val (icon, tint, statusText) = when (job.status) {
-        ExtractionStatus.COMPLETED -> Triple(Icons.Rounded.CheckCircle, NxEmerald, "Completed")
-        ExtractionStatus.CANCELLED -> Triple(Icons.Rounded.Cancel, NxAmber, "Cancelled")
+        ExtractionStatus.COMPLETED -> Triple(Icons.Rounded.CheckCircle, successColor, "Completed")
+        ExtractionStatus.CANCELLED -> Triple(Icons.Rounded.Cancel, warnColor, "Cancelled")
         ExtractionStatus.FAILED -> Triple(Icons.Rounded.ErrorOutline, MaterialTheme.colorScheme.error, "Failed")
-        else -> Triple(Icons.Rounded.HourglassTop, NxCyan, job.status.name)
+        else -> Triple(Icons.Rounded.HourglassEmpty, MaterialTheme.colorScheme.secondary, job.status.name)
     }
 
     val timeStr = job.finishedAtMs?.let {
         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it))
     } ?: ""
 
-    Card(
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top
+        Icon(
+            imageVector = icon,
+            contentDescription = statusText,
+            tint = tint,
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(20.dp)
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = statusText,
-                tint = tint,
-                modifier = Modifier.size(24.dp)
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = job.gameTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = timeStr,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "${job.target.label} • ${job.filesDone} files • ${BinaryUtils.formatBytes(job.bytesDone)}",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = job.gameTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
+                )
+                Text(
+                    text = timeStr,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
 
-                if (job.status == ExtractionStatus.COMPLETED && job.outputFolderLabel.isNotBlank()) {
-                    Text(
-                        text = "Saved to ${job.outputFolderLabel}",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
-                        color = NxEmerald
-                    )
-                } else if (job.errorMessage != null) {
-                    Text(
-                        text = job.errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
+            Text(
+                text = "${job.target.label} • ${job.filesDone} files • ${BinaryUtils.formatBytes(job.bytesDone)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (job.status == ExtractionStatus.COMPLETED && job.outputFolderLabel.isNotBlank()) {
+                Text(
+                    text = "Saved to ${job.outputFolderLabel}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
+                    color = successColor
+                )
+            } else if (job.errorMessage != null) {
+                Text(
+                    text = job.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
