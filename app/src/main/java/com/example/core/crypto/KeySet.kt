@@ -6,6 +6,11 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.util.Locale
 
+data class EncryptedTitleKeyEntry(
+    val encryptedKey: ByteArray,
+    val masterKeyRevision: Int
+)
+
 data class KeyValidationSummary(
     val isLoaded: Boolean = false,
     val totalKeysCount: Int = 0,
@@ -23,28 +28,56 @@ data class KeyValidationSummary(
 class KeySet(
     val headerKey: ByteArray? = null,
     val keyAreaKeyApplication: Map<Int, ByteArray> = emptyMap(),
+    val keyAreaKeyOcean: Map<Int, ByteArray> = emptyMap(),
+    val keyAreaKeySystem: Map<Int, ByteArray> = emptyMap(),
     val titleKeks: Map<Int, ByteArray> = emptyMap(),
     val masterKeys: Map<Int, ByteArray> = emptyMap(),
+    val titlekekSource: ByteArray? = null,
     val titleKeys: MutableMap<String, ByteArray> = mutableMapOf(),
-    val encryptedTitleKeys: MutableMap<String, ByteArray> = mutableMapOf(),
+    val encryptedTitleKeys: MutableMap<String, EncryptedTitleKeyEntry> = mutableMapOf(),
     val rawKeyCount: Int = 0
 ) {
     fun getKeyAreaKeyApp(generation: Int): ByteArray? = keyAreaKeyApplication[generation]
 
-    fun getTitleKek(generation: Int): ByteArray? = titleKeks[generation]
+    fun getKeyAreaKey(keyIndex: Int, generation: Int): ByteArray? {
+        return when (keyIndex) {
+            1 -> keyAreaKeyOcean[generation] ?: keyAreaKeyApplication[generation]
+            2 -> keyAreaKeySystem[generation] ?: keyAreaKeyApplication[generation]
+            else -> keyAreaKeyApplication[generation]
+        }
+    }
+
+    fun getTitleKek(generation: Int): ByteArray? {
+        titleKeks[generation]?.let { return it }
+        val master = masterKeys[generation]
+        val src = titlekekSource
+        if (master != null && src != null && src.size == 16) {
+            return runCatching { SwitchCrypto.aes128EcbDecrypt(master, src) }.getOrNull()
+        }
+        return null
+    }
+
+    fun allKnownTitleKekGenerations(): List<Int> {
+        return (titleKeks.keys + if (titlekekSource != null) masterKeys.keys else emptySet())
+            .distinct()
+            .sorted()
+    }
 
     fun getPlainTitleKey(rightsIdHex: String): ByteArray? =
         titleKeys[rightsIdHex.lowercase(Locale.US)]
 
-    fun getEncryptedTitleKey(rightsIdHex: String): ByteArray? =
+    fun getEncryptedTitleKey(rightsIdHex: String): EncryptedTitleKeyEntry? =
         encryptedTitleKeys[rightsIdHex.lowercase(Locale.US)]
 
     fun putPlainTitleKey(rightsIdHex: String, plainKey: ByteArray) {
         titleKeys[rightsIdHex.lowercase(Locale.US)] = plainKey
     }
 
-    fun putEncryptedTitleKey(rightsIdHex: String, encryptedKey: ByteArray) {
-        encryptedTitleKeys[rightsIdHex.lowercase(Locale.US)] = encryptedKey
+    fun putEncryptedTitleKey(rightsIdHex: String, encryptedKey: ByteArray, masterKeyRevision: Int = 0) {
+        encryptedTitleKeys[rightsIdHex.lowercase(Locale.US)] = EncryptedTitleKeyEntry(
+            encryptedKey = encryptedKey,
+            masterKeyRevision = masterKeyRevision
+        )
     }
 
     fun summarize(): KeyValidationSummary {
@@ -74,8 +107,11 @@ class KeySet(
         fun parse(prodKeysStream: InputStream, titleKeysStream: InputStream? = null): KeySet {
             var headerKey: ByteArray? = null
             val keyAreaApp = mutableMapOf<Int, ByteArray>()
+            val keyAreaOcean = mutableMapOf<Int, ByteArray>()
+            val keyAreaSystem = mutableMapOf<Int, ByteArray>()
             val titleKeks = mutableMapOf<Int, ByteArray>()
             val masterKeys = mutableMapOf<Int, ByteArray>()
+            var titlekekSource: ByteArray? = null
             val titleKeys = mutableMapOf<String, ByteArray>()
             var count = 0
 
@@ -95,9 +131,22 @@ class KeySet(
                     keyName == "header_key" && keyBytes.size == 32 -> {
                         headerKey = keyBytes
                     }
+                    keyName == "titlekek_source" && keyBytes.size == 16 -> {
+                        titlekekSource = keyBytes
+                    }
                     keyName.startsWith("key_area_key_application_") && keyBytes.size == 16 -> {
                         keyName.removePrefix("key_area_key_application_").toIntOrNull(16)?.let { gen ->
                             keyAreaApp[gen] = keyBytes
+                        }
+                    }
+                    keyName.startsWith("key_area_key_ocean_") && keyBytes.size == 16 -> {
+                        keyName.removePrefix("key_area_key_ocean_").toIntOrNull(16)?.let { gen ->
+                            keyAreaOcean[gen] = keyBytes
+                        }
+                    }
+                    keyName.startsWith("key_area_key_system_") && keyBytes.size == 16 -> {
+                        keyName.removePrefix("key_area_key_system_").toIntOrNull(16)?.let { gen ->
+                            keyAreaSystem[gen] = keyBytes
                         }
                     }
                     keyName.startsWith("titlekek_") && keyBytes.size == 16 -> {
@@ -132,8 +181,11 @@ class KeySet(
             return KeySet(
                 headerKey = headerKey,
                 keyAreaKeyApplication = keyAreaApp,
+                keyAreaKeyOcean = keyAreaOcean,
+                keyAreaKeySystem = keyAreaSystem,
                 titleKeks = titleKeks,
                 masterKeys = masterKeys,
+                titlekekSource = titlekekSource,
                 titleKeys = titleKeys,
                 rawKeyCount = count
             )

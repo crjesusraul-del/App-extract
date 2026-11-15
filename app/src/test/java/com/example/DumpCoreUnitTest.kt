@@ -150,6 +150,172 @@ class DumpCoreUnitTest {
         assertArrayEquals(controlNca, extractedFiles["nca/control.nca"])
     }
 
+    @Test
+    fun `extract ticketed eShop NSP with HierarchicalSha256 offset and mismatched tik revision`() {
+        val headerKey = ByteArray(32) { (it + 1).toByte() }
+        val titleKek00 = ByteArray(16) { (it + 0x10).toByte() }
+        val titleKek03 = ByteArray(16) { (it + 0x33).toByte() }
+        val keyAreaKey00 = ByteArray(16) { (it + 0x20).toByte() }
+        val plainTitleKey = ByteArray(16) { (it + 0x77).toByte() }
+        val rightsId = ByteArray(16) { if (it < 8) (it + 1).toByte() else 0 }
+
+        val keys = KeySet(
+            headerKey = headerKey,
+            keyAreaKeyApplication = mapOf(0 to keyAreaKey00),
+            titleKeks = mapOf(0 to titleKek00, 3 to titleKek03),
+            rawKeyCount = 4
+        )
+
+        val mainBytes = "BOTW_MAIN_EXE".toByteArray()
+        val exeFsPfs0 = buildPfs0(listOf("main" to mainBytes))
+        // Prepend 0x2000 hash table before PFS0 inside Section 0
+        val hashTableSize = 0x2000
+        val hashedPfs0Section = ByteArray(hashTableSize + ((exeFsPfs0.size + 0x1FF) / 0x200) * 0x200).apply {
+            for (i in 0 until hashTableSize) this[i] = (i xor 0x5A).toByte()
+            System.arraycopy(exeFsPfs0, 0, this, hashTableSize, exeFsPfs0.size)
+        }
+
+        val romData = "BOTW_WORLD_BIN".toByteArray()
+        val romFsBytes = buildMinimalRomFs("data", "world.bin", romData)
+
+        // Program NCA uses keyGeneration=0, RightsId != 0, and HierarchicalSha256 pfs0_offset=0x2000
+        val programNca = buildSyntheticNca(
+            contentType = NcaContentType.PROGRAM,
+            titleId = 0x01007EF00011E000L,
+            headerKey = headerKey,
+            keyAreaKey00 = keyAreaKey00,
+            plainSectionKey = plainTitleKey,
+            pfs0Section = hashedPfs0Section,
+            romFsSection = romFsBytes,
+            rightsId = rightsId,
+            pfs0SubOffset = hashTableSize.toLong(),
+            pfs0SubSize = exeFsPfs0.size.toLong(),
+            useNca2Header = false
+        )
+
+        // Ticket encrypted with titlekek_03 while masterKeyRevision is 4 (-> 3), even though NCA keyGeneration=0
+        val encTitleKey = SwitchCrypto.aes128EcbEncrypt(titleKek03, plainTitleKey)
+        val ticketBytes = buildTicket(
+            sigType = 0x010004L,
+            encryptedTitleKey = encTitleKey,
+            masterKeyRevision = 4,
+            rightsId = rightsId
+        )
+
+        val nspBytes = buildPfs0(
+            listOf(
+                "01007ef00011e000.nca" to programNca,
+                "01007ef00011e000.tik" to ticketBytes
+            )
+        )
+
+        val extracted = mutableMapOf<String, ByteArray>()
+        val sink = object : ExtractionSink {
+            override fun writeFile(relativePath: String, totalSize: Long, writer: (OutputStream) -> Unit) {
+                val baos = ByteArrayOutputStream()
+                writer(baos)
+                extracted[relativePath] = baos.toByteArray()
+            }
+        }
+
+        DumpProcessor.extract(
+            baseSource = ByteArraySeekableSource(nspBytes),
+            baseFormat = DumpFormat.NSP,
+            updateSource = null,
+            updateFormat = null,
+            target = ExtractionTarget.BOTH,
+            keys = keys,
+            sink = sink,
+            callbacks = ExtractionProgressCallback({}, { _, _, _, _, _ -> }, { false })
+        )
+
+        assertArrayEquals(mainBytes, extracted["exefs/main"])
+        assertArrayEquals(romData, extracted["romfs/data/world.bin"])
+    }
+
+    @Test
+    fun `extract NCA2 where each FsHeader uses sector 0 XTS tweak`() {
+        val headerKey = ByteArray(32) { (it + 5).toByte() }
+        val keyAreaKey00 = ByteArray(16) { (it + 0x22).toByte() }
+        val plainSectionKey = ByteArray(16) { (it + 0x66).toByte() }
+        val keys = KeySet(
+            headerKey = headerKey,
+            keyAreaKeyApplication = mapOf(0 to keyAreaKey00),
+            rawKeyCount = 2
+        )
+
+        val npdm = "NCA2_NPDM".toByteArray()
+        val exeFsPfs0 = buildPfs0(listOf("main.npdm" to npdm))
+        val nca2Bytes = buildSyntheticNca(
+            contentType = NcaContentType.PROGRAM,
+            titleId = 0x0100112233440000L,
+            headerKey = headerKey,
+            keyAreaKey00 = keyAreaKey00,
+            plainSectionKey = plainSectionKey,
+            pfs0Section = exeFsPfs0,
+            romFsSection = null,
+            useNca2Header = true
+        )
+
+        val extracted = mutableMapOf<String, ByteArray>()
+        val sink = object : ExtractionSink {
+            override fun writeFile(relativePath: String, totalSize: Long, writer: (OutputStream) -> Unit) {
+                val baos = ByteArrayOutputStream()
+                writer(baos)
+                extracted[relativePath] = baos.toByteArray()
+            }
+        }
+
+        DumpProcessor.extract(
+            baseSource = ByteArraySeekableSource(nca2Bytes),
+            baseFormat = DumpFormat.NCA,
+            updateSource = null,
+            updateFormat = null,
+            target = ExtractionTarget.EXEFS,
+            keys = keys,
+            sink = sink,
+            callbacks = ExtractionProgressCallback({}, { _, _, _, _, _ -> }, { false })
+        )
+
+        assertArrayEquals(npdm, extracted["exefs/main.npdm"])
+    }
+
+    @Test
+    fun `parse ECDSA and RSA-4096 tickets`() {
+        val tk = ByteArray(16) { (it + 0x41).toByte() }
+        val rid = ByteArray(16) { (0x90 + it).toByte() }
+
+        val ecdsaTik = buildTicket(sigType = 0x010005L, encryptedTitleKey = tk, masterKeyRevision = 1, rightsId = rid)
+        val parsedEcdsa = com.example.core.formats.TicketParser.parse(ByteArraySeekableSource(ecdsaTik))
+        assertArrayEquals(tk, parsedEcdsa.titleKeyBytes)
+        assertEquals(1, parsedEcdsa.keyGeneration)
+
+        val rsa4kTik = buildTicket(sigType = 0x010003L, encryptedTitleKey = tk, masterKeyRevision = 2, rightsId = rid)
+        val parsedRsa4k = com.example.core.formats.TicketParser.parse(ByteArraySeekableSource(rsa4kTik))
+        assertArrayEquals(tk, parsedRsa4k.titleKeyBytes)
+        assertEquals(2, parsedRsa4k.keyGeneration)
+    }
+
+    private fun buildTicket(
+        sigType: Long,
+        encryptedTitleKey: ByteArray,
+        masterKeyRevision: Int,
+        rightsId: ByteArray
+    ): ByteArray {
+        val bodyStart = when (sigType) {
+            0x010003L, 0x010000L -> 0x240
+            0x010005L, 0x010002L -> 0x80
+            else -> 0x140
+        }
+        val out = ByteArray(bodyStart + 0x180)
+        ByteBuffer.wrap(out, 0, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(sigType.toInt())
+        System.arraycopy(encryptedTitleKey, 0, out, bodyStart + 0x40, 16)
+        out[bodyStart + 0x141] = 0 // Common ticket
+        out[bodyStart + 0x145] = masterKeyRevision.toByte()
+        System.arraycopy(rightsId, 0, out, bodyStart + 0x160, 16)
+        return out
+    }
+
     private fun buildPfs0(files: List<Pair<String, ByteArray>>): ByteArray {
         val strTableBaos = ByteArrayOutputStream()
         val strOffsets = mutableListOf<Int>()
@@ -278,12 +444,16 @@ class DumpCoreUnitTest {
         keyAreaKey00: ByteArray,
         plainSectionKey: ByteArray,
         pfs0Section: ByteArray?,
-        romFsSection: ByteArray?
+        romFsSection: ByteArray?,
+        rightsId: ByteArray? = null,
+        pfs0SubOffset: Long = 0L,
+        pfs0SubSize: Long = 0L,
+        useNca2Header: Boolean = false
     ): ByteArray {
         val header = ByteArray(0xC00)
         val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
         buf.position(0x200)
-        buf.put("NCA3".toByteArray(Charsets.US_ASCII))
+        buf.put((if (useNca2Header) "NCA2" else "NCA3").toByteArray(Charsets.US_ASCII))
         buf.put(0.toByte()) // distribution
         buf.put(contentType.code.toByte())
         buf.put(0.toByte()) // cryptoType1
@@ -308,6 +478,10 @@ class DumpCoreUnitTest {
         buf.putLong(totalSize)
         buf.putLong(titleId)
 
+        if (rightsId != null && rightsId.size == 16) {
+            System.arraycopy(rightsId, 0, header, 0x230, 16)
+        }
+
         // Key area slot 2 = encrypted section key
         val encryptedKey2 = SwitchCrypto.aes128EcbEncrypt(keyAreaKey00, plainSectionKey)
         System.arraycopy(encryptedKey2, 0, header, 0x320, 16)
@@ -326,6 +500,14 @@ class DumpCoreUnitTest {
             header[fsHeaderOff + 0x02] = fsType.code.toByte()
             header[fsHeaderOff + 0x03] = if (fsType == NcaFsType.PFS0) 2.toByte() else 3.toByte()
             header[fsHeaderOff + 0x04] = NcaEncryptionType.AES_CTR.code.toByte()
+            if (fsType == NcaFsType.PFS0 && pfs0SubSize > 0) {
+                buf.position(fsHeaderOff + 0x08 + 0x24)
+                buf.putInt(2) // layerCount
+                buf.putLong(0L)
+                buf.putLong(pfs0SubOffset)
+                buf.putLong(pfs0SubOffset)
+                buf.putLong(pfs0SubSize)
+            }
             val ctrNonce = byteArrayOf(1, 2, 3, 4, 5, 6, 7, (idx + 1).toByte())
             System.arraycopy(ctrNonce, 0, header, fsHeaderOff + 0x140, 8)
 
@@ -334,7 +516,19 @@ class DumpCoreUnitTest {
             curOffset += plainBytes.size
         }
 
-        val encHeader = SwitchCrypto.encryptNcaHeaderXts(headerKey, header)
+        val encHeader = if (useNca2Header) {
+            val mainEnc = SwitchCrypto.encryptNcaHeaderXts(headerKey, header.copyOfRange(0, 0x400), startSector = 0L)
+            val combined = ByteArray(0xC00)
+            System.arraycopy(mainEnc, 0, combined, 0, 0x400)
+            for (i in 0 until 4) {
+                val off = 0x400 + i * 0x200
+                val fsEnc = SwitchCrypto.encryptNcaHeaderXts(headerKey, header.copyOfRange(off, off + 0x200), startSector = 0L)
+                System.arraycopy(fsEnc, 0, combined, off, 0x200)
+            }
+            combined
+        } else {
+            SwitchCrypto.encryptNcaHeaderXts(headerKey, header)
+        }
         val fullOut = ByteArrayOutputStream()
         fullOut.write(encHeader)
         for (sec in encryptedSections) {

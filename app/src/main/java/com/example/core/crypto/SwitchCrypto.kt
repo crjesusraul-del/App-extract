@@ -22,7 +22,7 @@ object SwitchCrypto {
     }
 
     /**
-     * Decrypts Switch NCA header sectors (0x200 bytes per sector) using AES-128-XTS.
+     * Decrypts Switch NCA sectors (0x200 bytes per sector) using AES-128-XTS.
      * Switch NCA XTS places the big-endian 64-bit sector number in bytes 8..15 of the tweak.
      */
     fun decryptNcaHeaderXts(
@@ -31,8 +31,8 @@ object SwitchCrypto {
         sectorSize: Int = 0x200,
         startSector: Long = 0L
     ): ByteArray {
-        require(headerKey.size == 32) { "NCA header_key must be 32 bytes" }
-        require(encryptedHeader.size % 16 == 0) { "Encrypted header must be block-aligned" }
+        require(headerKey.size == 32) { "NCA XTS key must be 32 bytes" }
+        require(encryptedHeader.size % 16 == 0) { "Encrypted XTS data must be block-aligned" }
 
         val dataKey = SecretKeySpec(headerKey.copyOfRange(0, 16), "AES")
         val tweakKey = SecretKeySpec(headerKey.copyOfRange(16, 32), "AES")
@@ -79,7 +79,7 @@ object SwitchCrypto {
         sectorSize: Int = 0x200,
         startSector: Long = 0L
     ): ByteArray {
-        require(headerKey.size == 32) { "NCA header_key must be 32 bytes" }
+        require(headerKey.size == 32) { "NCA XTS key must be 32 bytes" }
         val dataKey = SecretKeySpec(headerKey.copyOfRange(0, 16), "AES")
         val tweakKey = SecretKeySpec(headerKey.copyOfRange(16, 32), "AES")
         val dataCipher = Cipher.getInstance("AES/ECB/NoPadding").apply {
@@ -144,6 +144,51 @@ object SwitchCrypto {
     }
 }
 
+class AesXtsSeekableSource(
+    private val underlying: SeekableSource,
+    private val key32: ByteArray,
+    private val sectorSize: Int = 0x200
+) : SeekableSource {
+
+    override val length: Long get() = underlying.length
+
+    override fun readAt(offset: Long, buffer: ByteArray, bufferOffset: Int, readLength: Int): Int {
+        if (offset < 0 || offset >= length || readLength <= 0) return 0
+        val clamped = minOf(readLength.toLong(), length - offset).toInt()
+        val firstSector = offset / sectorSize
+        val sectorBase = firstSector * sectorSize
+        val intraSectorOffset = (offset - sectorBase).toInt()
+        val alignedLen = (((intraSectorOffset + clamped + sectorSize - 1) / sectorSize) * sectorSize)
+            .toLong()
+            .coerceAtMost(length - sectorBase)
+            .toInt()
+        val alignedBlockLen = (alignedLen / 16) * 16
+        if (alignedBlockLen <= intraSectorOffset) return 0
+
+        val encBuf = ByteArray(alignedBlockLen)
+        var totalRead = 0
+        while (totalRead < alignedBlockLen) {
+            val n = underlying.readAt(sectorBase + totalRead, encBuf, totalRead, alignedBlockLen - totalRead)
+            if (n <= 0) break
+            totalRead += n
+        }
+        val usableBlockLen = (totalRead / 16) * 16
+        if (usableBlockLen <= intraSectorOffset) return 0
+        val decBuf = SwitchCrypto.decryptNcaHeaderXts(
+            headerKey = key32,
+            encryptedHeader = if (usableBlockLen == encBuf.size) encBuf else encBuf.copyOf(usableBlockLen),
+            sectorSize = sectorSize,
+            startSector = firstSector
+        )
+        val toCopy = minOf(clamped, decBuf.size - intraSectorOffset)
+        if (toCopy <= 0) return 0
+        System.arraycopy(decBuf, intraSectorOffset, buffer, bufferOffset, toCopy)
+        return toCopy
+    }
+
+    override fun close() = Unit
+}
+
 class AesCtrSeekableSource(
     private val underlying: SeekableSource,
     private val key: ByteArray,
@@ -175,7 +220,7 @@ class AesCtrSeekableSource(
         }
         if (totalRead <= intraBlockOffset) return 0
 
-        val blocksToDecrypt = ((totalRead + 15) / 16)
+        val blocksToDecrypt = (totalRead + 15) / 16
         val cipher = Cipher.getInstance("AES/ECB/NoPadding").apply {
             init(Cipher.ENCRYPT_MODE, keySpec)
         }
@@ -193,7 +238,8 @@ class AesCtrSeekableSource(
 
             val encStart = b * 16
             val copyStart = if (b == 0) intraBlockOffset else 0
-            val copyEnd = minOf(16, if (b == 0) intraBlockOffset + actualOutLen else (encStart + 16).coerceAtMost(intraBlockOffset + actualOutLen) - encStart)
+            val remainingTarget = intraBlockOffset + actualOutLen - encStart
+            val copyEnd = minOf(16, remainingTarget)
             for (i in copyStart until copyEnd) {
                 if (outPos >= actualOutLen) break
                 buffer[bufferOffset + outPos] = (encBuf[encStart + i].toInt() xor keystream[i].toInt()).toByte()
