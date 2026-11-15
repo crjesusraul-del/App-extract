@@ -1,0 +1,6 @@
+{
+  "name": "nxdump",
+  "description": "Android utility to inspect and extract ExeFS and RomFS directly from Nintendo Switch XCI, NSP, and NCA game dumps with BKTR update patching.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
