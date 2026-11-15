@@ -120,6 +120,7 @@ data class ExtractionProgress(
     val bytesDone: Long,
     val totalBytes: Long,
     val outputFolderLabel: String,
+    val speedBytesPerSec: Long = 0L,
     val errorMessage: String? = null,
     val startedAtMs: Long = System.currentTimeMillis(),
     val finishedAtMs: Long? = null

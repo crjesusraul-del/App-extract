@@ -63,11 +63,11 @@ data class ExtractionProgressCallback(
 
 object DumpProcessor {
 
-    private const val COPY_BUFFER_SIZE = 2 * 1024 * 1024
-    private const val READ_AHEAD_WINDOW_SIZE = 1024 * 1024
+    private const val COPY_BUFFER_SIZE = 4 * 1024 * 1024
+    private const val READ_AHEAD_WINDOW_SIZE = 2 * 1024 * 1024
     private const val SMALL_FILE_THRESHOLD = 512L * 1024L
-    private const val WRITER_POOL_THREADS = 4
-    private const val MAX_IN_FLIGHT_SMALL_FILES = 24
+    private const val WRITER_POOL_THREADS = 8
+    private const val MAX_IN_FLIGHT_SMALL_FILES = 64
 
     fun detectFormatByName(fileName: String): DumpFormat? {
         val lower = fileName.lowercase(Locale.US)
@@ -394,7 +394,8 @@ object DumpProcessor {
             Thread(r, "nxdump-io-${threadCounter.incrementAndGet()}").apply { isDaemon = true }
         }
         val inFlightPermits = Semaphore(MAX_IN_FLIGHT_SMALL_FILES)
-        val pendingFutures = ArrayDeque<Future<*>>(64)
+        val activeSmallTasks = AtomicInteger(0)
+        val drainLock = Object()
         val firstError = AtomicReference<Throwable?>(null)
         val filesDoneCounter = AtomicInteger(0)
         val bytesDoneCounter = AtomicLong(0L)
@@ -405,8 +406,11 @@ object DumpProcessor {
         }
 
         fun drainWriters() {
-            while (pendingFutures.isNotEmpty()) {
-                pendingFutures.removeFirst().get()
+            synchronized(drainLock) {
+                while (activeSmallTasks.get() > 0) {
+                    drainLock.wait(50L)
+                    if (callbacks.isCancelled()) break
+                }
             }
             checkStatus()
         }
@@ -415,9 +419,10 @@ object DumpProcessor {
             checkStatus()
             val payload = if (size == 0L) ByteArray(0) else src.readFully(0, size.toInt())
             inFlightPermits.acquire()
-            val future = writerPool.submit(Callable {
+            activeSmallTasks.incrementAndGet()
+            writerPool.execute {
                 try {
-                    if (callbacks.isCancelled() || firstError.get() != null) return@Callable
+                    if (callbacks.isCancelled() || firstError.get() != null) return@execute
                     sink.writeFile(outPath, size) { os ->
                         if (payload.isNotEmpty()) os.write(payload)
                     }
@@ -428,24 +433,21 @@ object DumpProcessor {
                     firstError.compareAndSet(null, t)
                 } finally {
                     inFlightPermits.release()
+                    if (activeSmallTasks.decrementAndGet() == 0) {
+                        synchronized(drainLock) { drainLock.notifyAll() }
+                    }
                 }
-            })
-            pendingFutures.addLast(future)
-            if (pendingFutures.size >= 48) {
-                while (pendingFutures.size > 16) {
-                    pendingFutures.removeFirst().get()
-                }
-                checkStatus()
             }
         }
 
         fun writeLargeFileDoubleBuffered(outPath: String, src: SeekableSource, size: Long) {
             drainWriters()
-            val freeBuffers = ArrayBlockingQueue<ByteArray>(2).apply {
+            val freeBuffers = ArrayBlockingQueue<ByteArray>(3).apply {
+                put(ByteArray(COPY_BUFFER_SIZE))
                 put(ByteArray(COPY_BUFFER_SIZE))
                 put(ByteArray(COPY_BUFFER_SIZE))
             }
-            val filledQueue = ArrayBlockingQueue<Pair<ByteArray, Int>>(2)
+            val filledQueue = ArrayBlockingQueue<Pair<ByteArray, Int>>(3)
             val writerError = AtomicReference<Throwable?>(null)
 
             val writerFuture = writerPool.submit(Callable {

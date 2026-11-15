@@ -212,6 +212,8 @@ class AesCtrSeekableSource(
     private val ivScratch = ByteArray(16)
     private var ioScratch = ByteArray(0)
     private var decScratch = ByteArray(0)
+    private var cipherInitialized = false
+    private var expectedNextAbsOffset = -1L
 
     override fun readAt(offset: Long, buffer: ByteArray, bufferOffset: Int, readLength: Int): Int {
         if (offset < 0 || offset >= length || readLength <= 0) return 0
@@ -238,21 +240,59 @@ class AesCtrSeekableSource(
 
             val actualOutLen = minOf(clamped, totalRead - intraBlockOffset)
             val cipherLen = ((totalRead + 15) / 16) * 16
-            if (cipherLen > totalRead) {
+            val eofPadded = cipherLen > totalRead
+            if (eofPadded) {
                 ioScratch.fill(0, totalRead, cipherLen)
             }
 
-            SwitchCrypto.writeCtrIv(sectionCtrNonce, blockAlign, ivScratch)
-            ctrCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(ivScratch))
-
-            if (intraBlockOffset == 0 && actualOutLen == cipherLen) {
-                // Fast zero-copy decrypt directly into caller's destination buffer
-                ctrCipher.doFinal(ioScratch, 0, cipherLen, buffer, bufferOffset)
+            val directOutput = (intraBlockOffset == 0 && actualOutLen == cipherLen)
+            val destBuf: ByteArray
+            val destOff: Int
+            if (directOutput) {
+                destBuf = buffer
+                destOff = bufferOffset
             } else {
                 if (decScratch.size < cipherLen) {
                     decScratch = ByteArray(cipherLen)
                 }
-                ctrCipher.doFinal(ioScratch, 0, cipherLen, decScratch, 0)
+                destBuf = decScratch
+                destOff = 0
+            }
+
+            if (cipherInitialized && blockAlign == expectedNextAbsOffset && !eofPadded) {
+                val produced = ctrCipher.update(ioScratch, 0, cipherLen, destBuf, destOff)
+                if (produced == cipherLen) {
+                    expectedNextAbsOffset = blockAlign + cipherLen
+                } else {
+                    SwitchCrypto.writeCtrIv(sectionCtrNonce, blockAlign, ivScratch)
+                    ctrCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(ivScratch))
+                    ctrCipher.doFinal(ioScratch, 0, cipherLen, destBuf, destOff)
+                    cipherInitialized = false
+                    expectedNextAbsOffset = -1L
+                }
+            } else {
+                SwitchCrypto.writeCtrIv(sectionCtrNonce, blockAlign, ivScratch)
+                ctrCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(ivScratch))
+                if (!eofPadded) {
+                    val produced = ctrCipher.update(ioScratch, 0, cipherLen, destBuf, destOff)
+                    if (produced == cipherLen) {
+                        cipherInitialized = true
+                        expectedNextAbsOffset = blockAlign + cipherLen
+                    } else {
+                        SwitchCrypto.writeCtrIv(sectionCtrNonce, blockAlign, ivScratch)
+                        ctrCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(ivScratch))
+                        ctrCipher.doFinal(ioScratch, 0, cipherLen, destBuf, destOff)
+                        cipherInitialized = false
+                        expectedNextAbsOffset = -1L
+                    }
+                } else {
+                    ctrCipher.doFinal(ioScratch, 0, cipherLen, destBuf, destOff)
+                    cipherInitialized = false
+                    expectedNextAbsOffset = -1L
+                }
+            }
+
+            if (!directOutput) {
                 System.arraycopy(decScratch, intraBlockOffset, buffer, bufferOffset, actualOutLen)
             }
             return actualOutLen

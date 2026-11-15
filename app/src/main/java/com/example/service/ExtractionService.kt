@@ -74,11 +74,16 @@ class ExtractionService : Service() {
         var lastNotifMs = 0L
         var lastUiUpdateMs = 0L
 
+        val progressLock = Any()
+
         while (true) {
             val item = manager.pollNext() ?: break
             val (jobId, request) = item
             val config = app.preferencesRepository.setupConfigFlow.first()
             val mergedVer = if (request.mergeUpdate) request.selectedUpdate?.displayVersion else null
+            val jobStartMs = System.currentTimeMillis()
+            var maxFilesDone = 0
+            var maxBytesDone = 0L
 
             var current = ExtractionProgress(
                 jobId = jobId,
@@ -93,7 +98,8 @@ class ExtractionService : Service() {
                 totalFiles = 0,
                 bytesDone = 0L,
                 totalBytes = 0L,
-                outputFolderLabel = config.outputDirName ?: "Output"
+                outputFolderLabel = config.outputDirName ?: "Output",
+                startedAtMs = jobStartMs
             )
             manager.updateActive(current)
 
@@ -103,41 +109,59 @@ class ExtractionService : Service() {
                     request = request,
                     callbacks = ExtractionProgressCallback(
                         onPhase = { phase ->
-                            current = current.copy(phaseLabel = phase)
-                            manager.updateActive(current)
+                            synchronized(progressLock) {
+                                current = current.copy(phaseLabel = phase)
+                                manager.updateActive(current)
+                            }
                             nm?.notify(NOTIFICATION_ID, buildNotification(current.gameTitle, phase, 0, true))
                         },
                         onFileProgress = { file, filesDone, totalFiles, bytesDone, totalBytes ->
-                            val now = System.currentTimeMillis()
-                            val isDone = filesDone >= totalFiles && totalFiles > 0
-                            if (isDone || now - lastUiUpdateMs >= 100L) {
-                                lastUiUpdateMs = now
-                                current = current.copy(
-                                    currentFile = file,
-                                    filesDone = filesDone,
-                                    totalFiles = totalFiles,
-                                    bytesDone = bytesDone,
-                                    totalBytes = totalBytes
-                                )
-                                manager.updateActive(current)
+                            var notifDetail: String? = null
+                            var notifPct = 0
+                            synchronized(progressLock) {
+                                if (filesDone > maxFilesDone) maxFilesDone = filesDone
+                                if (bytesDone > maxBytesDone) maxBytesDone = bytesDone
+                                val now = System.currentTimeMillis()
+                                val elapsedMs = (now - jobStartMs).coerceAtLeast(1L)
+                                val speedBps = (maxBytesDone * 1000L) / elapsedMs
+                                val isDone = maxFilesDone >= totalFiles && totalFiles > 0
+                                if (isDone || now - lastUiUpdateMs >= 100L) {
+                                    lastUiUpdateMs = now
+                                    current = current.copy(
+                                        currentFile = file,
+                                        filesDone = maxFilesDone,
+                                        totalFiles = totalFiles,
+                                        bytesDone = maxBytesDone,
+                                        totalBytes = totalBytes,
+                                        speedBytesPerSec = speedBps
+                                    )
+                                    manager.updateActive(current)
+                                }
+                                if (isDone || now - lastNotifMs > 400L) {
+                                    lastNotifMs = now
+                                    notifPct = if (totalBytes > 0L) ((maxBytesDone.toDouble() / totalBytes.toDouble()) * 100).toInt() else 0
+                                    val speedStr = if (speedBps > 0L) " • ${BinaryUtils.formatBytes(speedBps)}/s" else ""
+                                    notifDetail = "$maxFilesDone/$totalFiles • ${BinaryUtils.formatBytes(maxBytesDone)}$speedStr"
+                                }
                             }
-                            if (isDone || now - lastNotifMs > 400L) {
-                                lastNotifMs = now
-                                val pct = if (totalBytes > 0L) ((bytesDone.toDouble() / totalBytes.toDouble()) * 100).toInt() else 0
-                                val detail = "$filesDone/$totalFiles • ${BinaryUtils.formatBytes(bytesDone)}"
-                                nm?.notify(NOTIFICATION_ID, buildNotification(current.gameTitle, detail, pct, false))
+                            notifDetail?.let { detail ->
+                                nm?.notify(NOTIFICATION_ID, buildNotification(current.gameTitle, detail, notifPct, false))
                             }
                         },
                         isCancelled = { manager.isCancelled(jobId) }
                     )
                 )
 
-                val done = current.copy(
-                    status = ExtractionStatus.COMPLETED,
-                    phaseLabel = "Extraction complete",
-                    outputFolderLabel = outLabel,
-                    finishedAtMs = System.currentTimeMillis()
-                )
+                val done = synchronized(progressLock) {
+                    current.copy(
+                        status = ExtractionStatus.COMPLETED,
+                        phaseLabel = "Extraction complete",
+                        filesDone = maxFilesDone.coerceAtLeast(current.totalFiles),
+                        bytesDone = maxBytesDone.coerceAtLeast(current.totalBytes),
+                        outputFolderLabel = outLabel,
+                        finishedAtMs = System.currentTimeMillis()
+                    )
+                }
                 manager.completeActive(done)
                 showResultNotification(nm, "${request.game.titleName} extracted", "Saved to $outLabel")
             } catch (e: InterruptedException) {

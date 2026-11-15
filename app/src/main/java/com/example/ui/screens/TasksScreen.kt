@@ -218,8 +218,13 @@ private fun ActiveExtractionCard(
                         )
                     }
                 }
+                val speedText = if (job.speedBytesPerSec > 0L) {
+                    "${BinaryUtils.formatBytes(job.speedBytesPerSec)}/s • ${(job.fraction * 100).toInt()}%"
+                } else {
+                    "${(job.fraction * 100).toInt()}%"
+                }
                 Text(
-                    text = "${(job.fraction * 100).toInt()}%",
+                    text = speedText,
                     style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMonoFontFamily),
                     color = MaterialTheme.colorScheme.primary
                 )

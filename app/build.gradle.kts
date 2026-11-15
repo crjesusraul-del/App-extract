@@ -16,7 +16,7 @@ android {
     applicationId = "com.aistudio.nxdump.edgev2"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7
+    versionCode = 8
     versionName = "1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

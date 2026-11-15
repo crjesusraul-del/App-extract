@@ -322,6 +322,49 @@ class DumpCoreUnitTest {
     }
 
     @Test
+    fun `AesCtrSeekableSource sequential update fast path backward seek and EOF match ground truth`() {
+        val key = ByteArray(16) { (it * 13 + 5).toByte() }
+        val nonce = byteArrayOf(0x01, 0x02, 0x03, 0x04, 0xA0.toByte(), 0xB1.toByte(), 0xC2.toByte(), 0xD3.toByte())
+        val baseOff = 0x20000L
+        val plain = ByteArray(10_007) { ((it * 19) xor (it ushr 5)).toByte() }
+        val cipherBytes = encryptCtrSection(plain, key, nonce, baseOff)
+
+        val ctrSrc = com.example.core.crypto.AesCtrSeekableSource(
+            underlying = ByteArraySeekableSource(cipherBytes),
+            key = key,
+            sectionCtrNonce = nonce,
+            ctrBaseOffsetInNca = baseOff
+        )
+
+        // 1. Consecutive 16-byte-aligned sequential reads (exercises cipher.update() fast-path)
+        val chunk1 = ByteArray(2048)
+        val chunk2 = ByteArray(2048)
+        val chunk3 = ByteArray(4096)
+        assertEquals(2048, ctrSrc.readAt(0L, chunk1, 0, 2048))
+        assertEquals(2048, ctrSrc.readAt(2048L, chunk2, 0, 2048))
+        assertEquals(4096, ctrSrc.readAt(4096L, chunk3, 0, 4096))
+        assertArrayEquals(plain.copyOfRange(0, 2048), chunk1)
+        assertArrayEquals(plain.copyOfRange(2048, 4096), chunk2)
+        assertArrayEquals(plain.copyOfRange(4096, 8192), chunk3)
+
+        // 2. Partial EOF read continuing sequentially from 8192 to 10007
+        val tail = ByteArray(2048)
+        val tailRead = ctrSrc.readAt(8192L, tail, 0, 2048)
+        assertEquals(10_007 - 8192, tailRead)
+        assertArrayEquals(plain.copyOfRange(8192, 10_007), tail.copyOf(tailRead))
+
+        // 3. Backward unaligned seek after EOF
+        val seekBack = ByteArray(333)
+        assertEquals(333, ctrSrc.readAt(777L, seekBack, 0, 333))
+        assertArrayEquals(plain.copyOfRange(777, 1110), seekBack)
+
+        // 4. Sequential unaligned read right after backward seek
+        val seqUnaligned = ByteArray(512)
+        assertEquals(512, ctrSrc.readAt(1110L, seqUnaligned, 0, 512))
+        assertArrayEquals(plain.copyOfRange(1110, 1622), seqUnaligned)
+    }
+
+    @Test
     fun `parallel extraction extracts large file and small files cleanly`() {
         val headerKey = ByteArray(32) { (it + 9).toByte() }
         val keyAreaKey00 = ByteArray(16) { (it + 0x24).toByte() }
