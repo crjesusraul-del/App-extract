@@ -63,11 +63,18 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Text(
-                    text = "Settings & Keys",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                Column {
+                    Text(
+                        text = "Settings & Keys",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "nxdump v1.2 • ExeFS, RomFS & Raw NCA Extractor",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // Key diagnostics card

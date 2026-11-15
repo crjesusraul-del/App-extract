@@ -144,11 +144,12 @@ object DumpProcessor {
             (programNca?.sections?.any { it.hasBktr } == true)
         val isDlc = parsedCnmt?.metaType == ContentMetaType.ADD_ON_CONTENT
 
-        val exeFsSize = programNca?.sections?.firstOrNull { it.fsType == NcaFsType.PFS0 }?.dataSubSize ?: 0L
-        val romFsSize = programNca?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }?.dataSubSize ?: 0L
-        val hasBktr = programNca?.sections?.any { it.hasBktr } == true
-
         val fallbackTitle = fileName.substringBeforeLast('.').ifBlank { BinaryUtils.formatTitleId(baseTid) }
+        val activeNca = programNca ?: ncaSources.firstOrNull()?.let { NcaFile.parse(it.second, keys) }
+
+        val exeFsSize = activeNca?.sections?.firstOrNull { it.fsType == NcaFsType.PFS0 }?.dataSubSize ?: 0L
+        val romFsSize = activeNca?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }?.dataSubSize ?: 0L
+        val hasBktr = activeNca?.sections?.any { it.hasBktr } == true
 
         return InspectedDump(
             format = format,
@@ -160,8 +161,8 @@ object DumpProcessor {
             versionCode = parsedCnmt?.version ?: 0L,
             isUpdatePatch = isUpdate,
             isDlc = isDlc,
-            hasExeFs = exeFsSize > 0L || programNca?.sections?.any { it.fsType == NcaFsType.PFS0 } == true,
-            hasRomFs = romFsSize > 0L || programNca?.sections?.any { it.fsType == NcaFsType.ROMFS } == true,
+            hasExeFs = exeFsSize > 0L || activeNca?.sections?.any { it.fsType == NcaFsType.PFS0 } == true,
+            hasRomFs = romFsSize > 0L || activeNca?.sections?.any { it.fsType == NcaFsType.ROMFS } == true,
             exeFsSizeBytes = exeFsSize,
             romFsSizeBytes = romFsSize,
             hasBktr = hasBktr,
@@ -178,31 +179,41 @@ object DumpProcessor {
         target: ExtractionTarget,
         keys: KeySet,
         sink: ExtractionSink,
-        callbacks: ExtractionProgressCallback
+        callbacks: ExtractionProgressCallback,
+        baseFileName: String = "content.nca",
+        updateFileName: String = "update.nca"
     ) {
         callbacks.onPhase("Parsing container & NCA headers...")
-        val baseNcas = openNcasWithTickets(baseSource, baseFormat, keys)
-        val baseProgram = findProgramNca(baseNcas, keys)
-            ?: throw IOException("No Program NCA found inside base dump.")
+        val baseNcas = openNcasWithTickets(baseSource, baseFormat, keys, baseFileName)
+        val updateNcas = if (updateSource != null && updateFormat != null) {
+            openNcasWithTickets(updateSource, updateFormat, keys, updateFileName)
+        } else {
+            emptyList()
+        }
 
-        val updateProgram: NcaFile? = if (updateSource != null && updateFormat != null) {
-            val updateNcas = openNcasWithTickets(updateSource, updateFormat, keys)
+        val extractExeFs = target == ExtractionTarget.EXEFS || target == ExtractionTarget.BOTH || target == ExtractionTarget.ALL
+        val extractRomFs = target == ExtractionTarget.ROMFS || target == ExtractionTarget.BOTH || target == ExtractionTarget.ALL
+        val extractNcas = target == ExtractionTarget.NCA || target == ExtractionTarget.ALL
+
+        val baseProgram = if (extractExeFs || extractRomFs) {
+            findProgramNca(baseNcas, keys)
+                ?: throw IOException("No NCA found inside base dump.")
+        } else null
+
+        val updateProgram: NcaFile? = if ((extractExeFs || extractRomFs) && updateNcas.isNotEmpty()) {
             findProgramNca(updateNcas, keys)
         } else {
             null
         }
 
-        val extractExeFs = target == ExtractionTarget.EXEFS || target == ExtractionTarget.BOTH
-        val extractRomFs = target == ExtractionTarget.ROMFS || target == ExtractionTarget.BOTH
-
         // Select ExeFS source (if update provides a full ExeFS PFS0, prefer update's ExeFS!)
-        val exeFsNca = if (extractExeFs) {
+        val exeFsNca = if (extractExeFs && baseProgram != null) {
             val updExe = updateProgram?.takeIf { nca -> nca.sections.any { it.fsType == NcaFsType.PFS0 } }
             updExe ?: baseProgram
         } else null
 
         val exeFsSection = exeFsNca?.sections?.firstOrNull { it.fsType == NcaFsType.PFS0 }
-        val baseRomFsSection = baseProgram.sections.firstOrNull { it.fsType == NcaFsType.ROMFS }
+        val baseRomFsSection = baseProgram?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }
         val updateRomFsSection = updateProgram?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }
 
         // Pre-scan entries to compute accurate total file counts and byte totals
@@ -211,7 +222,7 @@ object DumpProcessor {
             Pfs0Container.parse(exeFsNca.openSectionFilesystemSlice(exeFsSection, keys))
         } else null
 
-        val romFsReader = if (extractRomFs) {
+        val romFsReader = if (extractRomFs && baseProgram != null) {
             callbacks.onPhase(if (updateRomFsSection != null) "Indexing merged BKTR RomFS..." else "Indexing RomFS...")
             val romSource = when {
                 updateProgram != null && updateRomFsSection != null && updateRomFsSection.hasBktr -> {
@@ -231,14 +242,44 @@ object DumpProcessor {
             RomFsReader.parse(romSource)
         } else null
 
-        val totalFiles = (exeFsPfs0?.entries?.size ?: 0) + (romFsReader?.files?.size ?: 0)
-        val totalBytes = (exeFsPfs0?.entries?.sumOf { it.size } ?: 0L) + (romFsReader?.totalSizeBytes ?: 0L)
+        val rawNcaPlan = if (extractNcas) {
+            buildList {
+                baseNcas.forEach { (name, src) -> add("nca/$name" to src) }
+                updateNcas.forEach { (name, src) -> add("nca/update/$name" to src) }
+            }
+        } else {
+            emptyList()
+        }
+
+        val totalFiles = (exeFsPfs0?.entries?.size ?: 0) +
+            (romFsReader?.files?.size ?: 0) +
+            rawNcaPlan.size
+        val totalBytes = (exeFsPfs0?.entries?.sumOf { it.size } ?: 0L) +
+            (romFsReader?.totalSizeBytes ?: 0L) +
+            rawNcaPlan.sumOf { it.second.length }
+
         if (totalFiles == 0) {
             throw IOException("Selected target ($target) contains 0 extractable files.")
         }
 
         var filesDone = 0
         var bytesDone = 0L
+
+        if (rawNcaPlan.isNotEmpty()) {
+            callbacks.onPhase("Extracting raw NCAs...")
+            for ((outPath, ncaSrc) in rawNcaPlan) {
+                if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")
+                callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
+                sink.writeFile(outPath, ncaSrc.length) { os ->
+                    copyFromSeekable(ncaSrc, os, ncaSrc.length, callbacks) { delta ->
+                        bytesDone += delta
+                        callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
+                    }
+                }
+                filesDone++
+                callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
+            }
+        }
 
         if (exeFsPfs0 != null) {
             callbacks.onPhase("Extracting ExeFS...")
@@ -310,10 +351,14 @@ object DumpProcessor {
     private fun openNcasWithTickets(
         source: SeekableSource,
         format: DumpFormat,
-        keys: KeySet
+        keys: KeySet,
+        singleNcaName: String = "content.nca"
     ): List<Pair<String, SeekableSource>> {
         return when (format) {
-            DumpFormat.NCA -> listOf("content.nca" to source)
+            DumpFormat.NCA -> {
+                val safeName = if (singleNcaName.lowercase(Locale.US).endsWith(".nca")) singleNcaName else "$singleNcaName.nca"
+                listOf(safeName to source)
+            }
             DumpFormat.NSP -> {
                 val pfs = Pfs0Container.parse(source)
                 ingestTickets(pfs.entries.filter { it.name.endsWith(".tik", ignoreCase = true) }, keys) { entry ->

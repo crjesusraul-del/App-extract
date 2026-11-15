@@ -246,7 +246,9 @@ class DumpRepository(
                         target = request.target,
                         keys = keys,
                         sink = sink,
-                        callbacks = callbacks
+                        callbacks = callbacks,
+                        baseFileName = request.game.fileName,
+                        updateFileName = request.selectedUpdate.fileName
                     )
                 }
             } else {
@@ -258,7 +260,8 @@ class DumpRepository(
                     target = request.target,
                     keys = keys,
                     sink = sink,
-                    callbacks = callbacks
+                    callbacks = callbacks,
+                    baseFileName = request.game.fileName
                 )
             }
         }

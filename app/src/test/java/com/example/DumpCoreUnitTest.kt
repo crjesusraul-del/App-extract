@@ -133,7 +133,7 @@ class DumpCoreUnitTest {
             baseFormat = DumpFormat.NSP,
             updateSource = null,
             updateFormat = null,
-            target = ExtractionTarget.BOTH,
+            target = ExtractionTarget.ALL,
             keys = keys,
             sink = sink,
             callbacks = ExtractionProgressCallback(
@@ -146,6 +146,8 @@ class DumpCoreUnitTest {
         assertArrayEquals(mainBytes, extractedFiles["exefs/main"])
         assertArrayEquals(npdmBytes, extractedFiles["exefs/main.npdm"])
         assertArrayEquals(levelData, extractedFiles["romfs/data/level1.bin"])
+        assertArrayEquals(programNca, extractedFiles["nca/0100abcd00001000.nca"])
+        assertArrayEquals(controlNca, extractedFiles["nca/control.nca"])
     }
 
     private fun buildPfs0(files: List<Pair<String, ByteArray>>): ByteArray {

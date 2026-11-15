@@ -122,10 +122,27 @@ fun GameDetailSheet(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "This is a standalone Update/Patch dump (BKTR). Add the matching base game (${game.titleIdHex}) to merge and extract.",
+                        text = "This is a standalone Update/Patch dump (BKTR). Add the matching base game (${game.titleIdHex}) to merge ExeFS/RomFS, or extract raw .nca files below.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Button(
+                    onClick = {
+                        onStartExtraction(ExtractionTarget.NCA, null, false)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .testTag("extract_nca_only_btn"),
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Icon(Icons.Rounded.Download, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Extract Raw NCAs",
+                        style = MaterialTheme.typography.titleSmall
                     )
                 }
             } else {
@@ -245,6 +262,8 @@ fun GameDetailSheet(
                             ExtractionTarget.EXEFS -> game.hasExeFs
                             ExtractionTarget.ROMFS -> game.hasRomFs
                             ExtractionTarget.BOTH -> game.hasExeFs || game.hasRomFs
+                            ExtractionTarget.NCA -> true
+                            ExtractionTarget.ALL -> true
                         }
                         val isSelected = selectedTarget == target
                         Surface(
@@ -320,7 +339,7 @@ fun GameDetailSheet(
                     onClick = {
                         onStartExtraction(selectedTarget, selectedUpdate, mergeUpdate && selectedUpdate != null)
                     },
-                    enabled = game.hasExeFs || game.hasRomFs,
+                    enabled = game.hasExeFs || game.hasRomFs || selectedTarget == ExtractionTarget.NCA || selectedTarget == ExtractionTarget.ALL,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)

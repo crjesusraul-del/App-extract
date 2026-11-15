@@ -11,7 +11,9 @@ enum class DumpFormat {
 enum class ExtractionTarget(val label: String, val description: String) {
     EXEFS("ExeFS", "Executable code, main binary & NPDM"),
     ROMFS("RomFS", "Game assets, textures, audio & scripts"),
-    BOTH("ExeFS + RomFS", "Full unpacked game filesystem")
+    BOTH("ExeFS + RomFS", "Unpacked game filesystems"),
+    NCA("NCAs (Raw)", "Extract raw .nca container files"),
+    ALL("All (ExeFS + RomFS + NCAs)", "Unpacked filesystems plus raw .nca files")
 }
 
 enum class ThemeMode(val label: String) {
