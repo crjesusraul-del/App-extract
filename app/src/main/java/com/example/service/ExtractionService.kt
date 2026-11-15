@@ -9,7 +9,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.NxDumpApplication
 import com.example.R
@@ -48,9 +50,15 @@ class ExtractionService : Service() {
 
         if (isProcessing.compareAndSet(false, true)) {
             serviceScope.launch {
+                val pm = getSystemService(PowerManager::class.java)
+                val wakeLock = runCatching {
+                    pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${BuildConfig.APPLICATION_ID}:extraction")
+                        ?.apply { acquire(45 * 60 * 1000L) }
+                }.getOrNull()
                 try {
                     processQueue(app)
                 } finally {
+                    runCatching { if (wakeLock?.isHeld == true) wakeLock.release() }
                     isProcessing.set(false)
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -64,6 +72,7 @@ class ExtractionService : Service() {
         val manager = app.extractionManager
         val nm = getSystemService(NotificationManager::class.java)
         var lastNotifMs = 0L
+        var lastUiUpdateMs = 0L
 
         while (true) {
             val item = manager.pollNext() ?: break
@@ -99,18 +108,22 @@ class ExtractionService : Service() {
                             nm?.notify(NOTIFICATION_ID, buildNotification(current.gameTitle, phase, 0, true))
                         },
                         onFileProgress = { file, filesDone, totalFiles, bytesDone, totalBytes ->
-                            current = current.copy(
-                                currentFile = file,
-                                filesDone = filesDone,
-                                totalFiles = totalFiles,
-                                bytesDone = bytesDone,
-                                totalBytes = totalBytes
-                            )
-                            manager.updateActive(current)
                             val now = System.currentTimeMillis()
-                            if (now - lastNotifMs > 400L || filesDone == totalFiles) {
+                            val isDone = filesDone >= totalFiles && totalFiles > 0
+                            if (isDone || now - lastUiUpdateMs >= 100L) {
+                                lastUiUpdateMs = now
+                                current = current.copy(
+                                    currentFile = file,
+                                    filesDone = filesDone,
+                                    totalFiles = totalFiles,
+                                    bytesDone = bytesDone,
+                                    totalBytes = totalBytes
+                                )
+                                manager.updateActive(current)
+                            }
+                            if (isDone || now - lastNotifMs > 400L) {
                                 lastNotifMs = now
-                                val pct = (current.fraction * 100).toInt()
+                                val pct = if (totalBytes > 0L) ((bytesDone.toDouble() / totalBytes.toDouble()) * 100).toInt() else 0
                                 val detail = "$filesDone/$totalFiles • ${BinaryUtils.formatBytes(bytesDone)}"
                                 nm?.notify(NOTIFICATION_ID, buildNotification(current.gameTitle, detail, pct, false))
                             }
@@ -217,7 +230,7 @@ class ExtractionService : Service() {
         const val CHANNEL_ID = "dump_extraction_channel"
         private const val NOTIFICATION_ID = 1001
         private const val RESULT_NOTIFICATION_ID = 1002
-        const val ACTION_CANCEL = "com.example.action.CANCEL_EXTRACTION"
+        const val ACTION_CANCEL = "${BuildConfig.APPLICATION_ID}.action.CANCEL_EXTRACTION"
 
         fun start(context: Context) {
             val intent = Intent(context, ExtractionService::class.java)

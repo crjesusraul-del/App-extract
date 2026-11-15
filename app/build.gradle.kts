@@ -13,10 +13,10 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.nxdump.kxmrpq"
+    applicationId = "com.aistudio.nxdump.edgev2"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
+    versionCode = 7
     versionName = "1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

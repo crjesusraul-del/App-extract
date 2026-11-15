@@ -3,6 +3,7 @@ package com.example.core.crypto
 import com.example.core.io.BinaryUtils
 import com.example.core.io.SeekableSource
 import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object SwitchCrypto {
@@ -45,14 +46,16 @@ object SwitchCrypto {
 
         val out = ByteArray(encryptedHeader.size)
         val blockBuf = ByteArray(16)
+        val decBuf = ByteArray(16)
         val tweakInput = ByteArray(16)
+        val tweak = ByteArray(16)
         var sectorIndex = startSector
         var offset = 0
 
         while (offset < encryptedHeader.size) {
             tweakInput.fill(0)
             BinaryUtils.writeU64BE(sectorIndex, tweakInput, 8)
-            val tweak = tweakCipher.doFinal(tweakInput)
+            tweakCipher.doFinal(tweakInput, 0, 16, tweak, 0)
 
             val sectorEnd = minOf(offset + sectorSize, encryptedHeader.size)
             var blockOff = offset
@@ -60,9 +63,9 @@ object SwitchCrypto {
                 for (i in 0 until 16) {
                     blockBuf[i] = (encryptedHeader[blockOff + i].toInt() xor tweak[i].toInt()).toByte()
                 }
-                val decrypted = dataCipher.doFinal(blockBuf)
+                dataCipher.doFinal(blockBuf, 0, 16, decBuf, 0)
                 for (i in 0 until 16) {
-                    out[blockOff + i] = (decrypted[i].toInt() xor tweak[i].toInt()).toByte()
+                    out[blockOff + i] = (decBuf[i].toInt() xor tweak[i].toInt()).toByte()
                 }
                 gf128MulX(tweak)
                 blockOff += 16
@@ -91,14 +94,16 @@ object SwitchCrypto {
 
         val out = ByteArray(plainHeader.size)
         val blockBuf = ByteArray(16)
+        val encBuf = ByteArray(16)
         val tweakInput = ByteArray(16)
+        val tweak = ByteArray(16)
         var sectorIndex = startSector
         var offset = 0
 
         while (offset < plainHeader.size) {
             tweakInput.fill(0)
             BinaryUtils.writeU64BE(sectorIndex, tweakInput, 8)
-            val tweak = tweakCipher.doFinal(tweakInput)
+            tweakCipher.doFinal(tweakInput, 0, 16, tweak, 0)
 
             val sectorEnd = minOf(offset + sectorSize, plainHeader.size)
             var blockOff = offset
@@ -106,9 +111,9 @@ object SwitchCrypto {
                 for (i in 0 until 16) {
                     blockBuf[i] = (plainHeader[blockOff + i].toInt() xor tweak[i].toInt()).toByte()
                 }
-                val encrypted = dataCipher.doFinal(blockBuf)
+                dataCipher.doFinal(blockBuf, 0, 16, encBuf, 0)
                 for (i in 0 until 16) {
-                    out[blockOff + i] = (encrypted[i].toInt() xor tweak[i].toInt()).toByte()
+                    out[blockOff + i] = (encBuf[i].toInt() xor tweak[i].toInt()).toByte()
                 }
                 gf128MulX(tweak)
                 blockOff += 16
@@ -132,14 +137,17 @@ object SwitchCrypto {
         }
     }
 
+    fun writeCtrIv(sectionCtrNonce: ByteArray, ncaAbsoluteOffset: Long, outIv: ByteArray) {
+        for (i in 0 until 8) {
+            outIv[i] = sectionCtrNonce[7 - i]
+        }
+        BinaryUtils.writeU64BE(ncaAbsoluteOffset ushr 4, outIv, 8)
+    }
+
     fun buildCtrIv(sectionCtrNonce: ByteArray, ncaAbsoluteOffset: Long): ByteArray {
         require(sectionCtrNonce.size == 8) { "CTR nonce must be 8 bytes" }
         val iv = ByteArray(16)
-        // Reverse the 8-byte little-endian section CTR into the upper 64 bits of the big-endian IV
-        for (i in 0 until 8) {
-            iv[i] = sectionCtrNonce[7 - i]
-        }
-        BinaryUtils.writeU64BE(ncaAbsoluteOffset ushr 4, iv, 8)
+        writeCtrIv(sectionCtrNonce, ncaAbsoluteOffset, iv)
         return iv
     }
 }
@@ -191,7 +199,7 @@ class AesXtsSeekableSource(
 
 class AesCtrSeekableSource(
     private val underlying: SeekableSource,
-    private val key: ByteArray,
+    key: ByteArray,
     private val sectionCtrNonce: ByteArray,
     private val ctrBaseOffsetInNca: Long
 ) : SeekableSource {
@@ -199,6 +207,11 @@ class AesCtrSeekableSource(
     override val length: Long get() = underlying.length
 
     private val keySpec = SecretKeySpec(key, "AES")
+    private val cipherLock = Any()
+    private val ctrCipher = Cipher.getInstance("AES/CTR/NoPadding")
+    private val ivScratch = ByteArray(16)
+    private var ioScratch = ByteArray(0)
+    private var decScratch = ByteArray(0)
 
     override fun readAt(offset: Long, buffer: ByteArray, bufferOffset: Int, readLength: Int): Int {
         if (offset < 0 || offset >= length || readLength <= 0) return 0
@@ -210,43 +223,40 @@ class AesCtrSeekableSource(
 
         val underlyingStart = offset - intraBlockOffset
         val paddedLen = ((intraBlockOffset + clamped + 15) / 16) * 16
-        val encBuf = ByteArray(paddedLen)
 
-        var totalRead = 0
-        while (totalRead < paddedLen && underlyingStart + totalRead < length) {
-            val n = underlying.readAt(underlyingStart + totalRead, encBuf, totalRead, paddedLen - totalRead)
-            if (n <= 0) break
-            totalRead += n
-        }
-        if (totalRead <= intraBlockOffset) return 0
-
-        val blocksToDecrypt = (totalRead + 15) / 16
-        val cipher = Cipher.getInstance("AES/ECB/NoPadding").apply {
-            init(Cipher.ENCRYPT_MODE, keySpec)
-        }
-        val counterBlock = ByteArray(16)
-        val keystream = ByteArray(16)
-
-        val actualOutLen = minOf(clamped, totalRead - intraBlockOffset)
-        var outPos = 0
-
-        for (b in 0 until blocksToDecrypt) {
-            val blockAbsOffset = blockAlign + (b.toLong() * 16L)
-            val iv = SwitchCrypto.buildCtrIv(sectionCtrNonce, blockAbsOffset)
-            System.arraycopy(iv, 0, counterBlock, 0, 16)
-            cipher.doFinal(counterBlock, 0, 16, keystream, 0)
-
-            val encStart = b * 16
-            val copyStart = if (b == 0) intraBlockOffset else 0
-            val remainingTarget = intraBlockOffset + actualOutLen - encStart
-            val copyEnd = minOf(16, remainingTarget)
-            for (i in copyStart until copyEnd) {
-                if (outPos >= actualOutLen) break
-                buffer[bufferOffset + outPos] = (encBuf[encStart + i].toInt() xor keystream[i].toInt()).toByte()
-                outPos++
+        synchronized(cipherLock) {
+            if (ioScratch.size < paddedLen) {
+                ioScratch = ByteArray(paddedLen)
             }
+            var totalRead = 0
+            while (totalRead < paddedLen && underlyingStart + totalRead < length) {
+                val n = underlying.readAt(underlyingStart + totalRead, ioScratch, totalRead, paddedLen - totalRead)
+                if (n <= 0) break
+                totalRead += n
+            }
+            if (totalRead <= intraBlockOffset) return 0
+
+            val actualOutLen = minOf(clamped, totalRead - intraBlockOffset)
+            val cipherLen = ((totalRead + 15) / 16) * 16
+            if (cipherLen > totalRead) {
+                ioScratch.fill(0, totalRead, cipherLen)
+            }
+
+            SwitchCrypto.writeCtrIv(sectionCtrNonce, blockAlign, ivScratch)
+            ctrCipher.init(Cipher.DECRYPT_MODE, keySpec, IvParameterSpec(ivScratch))
+
+            if (intraBlockOffset == 0 && actualOutLen == cipherLen) {
+                // Fast zero-copy decrypt directly into caller's destination buffer
+                ctrCipher.doFinal(ioScratch, 0, cipherLen, buffer, bufferOffset)
+            } else {
+                if (decScratch.size < cipherLen) {
+                    decScratch = ByteArray(cipherLen)
+                }
+                ctrCipher.doFinal(ioScratch, 0, cipherLen, decScratch, 0)
+                System.arraycopy(decScratch, intraBlockOffset, buffer, bufferOffset, actualOutLen)
+            }
+            return actualOutLen
         }
-        return outPos
     }
 
     override fun close() = Unit

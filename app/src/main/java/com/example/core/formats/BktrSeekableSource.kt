@@ -33,6 +33,8 @@ class BktrSeekableSource private constructor(
     private val patchRomFsDataOffset: Long
 ) : SeekableSource {
 
+    private val ctrReaders = HashMap<Int, AesCtrSeekableSource>()
+
     override val length: Long get() = maxOf(virtualEndOffset, baseRomFs.length)
 
     override fun readAt(offset: Long, buffer: ByteArray, bufferOffset: Int, readLength: Int): Int {
@@ -70,13 +72,15 @@ class BktrSeekableSource private constructor(
                     patchSectionRaw.length
                 }
                 val subChunk = minOf(chunk.toLong(), (nextSubBoundary - patchSectionPos).coerceAtLeast(1L)).toInt()
-                val modifiedNonce = buildSubsectionNonce(baseCtrNonce, subEntry.ctrValue)
-                val ctrReader = AesCtrSeekableSource(
-                    underlying = patchSectionRaw,
-                    key = sectionKey,
-                    sectionCtrNonce = modifiedNonce,
-                    ctrBaseOffsetInNca = sectionStartInNca
-                )
+                val ctrReader = ctrReaders.getOrPut(subEntry.ctrValue) {
+                    val modifiedNonce = buildSubsectionNonce(baseCtrNonce, subEntry.ctrValue)
+                    AesCtrSeekableSource(
+                        underlying = patchSectionRaw,
+                        key = sectionKey,
+                        sectionCtrNonce = modifiedNonce,
+                        ctrBaseOffsetInNca = sectionStartInNca
+                    )
+                }
                 val read = ctrReader.readAt(patchSectionPos, buffer, outPos, subChunk)
                 if (read <= 0) break
                 currentVirtual += read

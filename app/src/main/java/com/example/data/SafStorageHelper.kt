@@ -9,7 +9,6 @@ import com.example.core.ExtractionSink
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
-import java.util.concurrent.ConcurrentHashMap
 
 object SafStorageHelper {
 
@@ -72,12 +71,31 @@ object SafStorageHelper {
     }
 }
 
+private data class SafChildNode(
+    val uri: Uri,
+    val isDirectory: Boolean
+)
+
+private class SafDirState(
+    val uri: Uri,
+    var childrenLoaded: Boolean,
+    val children: HashMap<String, SafChildNode> = HashMap()
+)
+
 class SafExtractionSink(
     private val context: Context,
-    private val rootDir: DocumentFile
+    private val rootDir: DocumentFile,
+    assumeRootEmpty: Boolean = false
 ) : ExtractionSink {
 
-    private val dirCache = ConcurrentHashMap<String, DocumentFile>()
+    override val supportsParallelWrites: Boolean = true
+
+    private val resolver = context.contentResolver
+    private val treeRootUri = rootDir.uri
+    private val dirLock = Any()
+    private val dirStates = HashMap<String, SafDirState>().apply {
+        put("", SafDirState(rootDir.uri, childrenLoaded = assumeRootEmpty))
+    }
 
     override fun writeFile(relativePath: String, totalSize: Long, writer: (OutputStream) -> Unit) {
         val normalized = relativePath.trimStart('/')
@@ -86,40 +104,122 @@ class SafExtractionSink(
 
         val parentPathParts = parts.dropLast(1)
         val fileName = parts.last()
-        val parentDir = ensureDirectory(parentPathParts)
 
-        // Replace existing file if re-extracting
-        parentDir.findFile(fileName)?.delete()
-        val targetFile = parentDir.createFile("application/octet-stream", fileName)
-            ?: throw IOException("Failed to create output file: $normalized")
+        val parentState: SafDirState
+        val existingToDelete: SafChildNode?
+        synchronized(dirLock) {
+            parentState = ensureDirectoryLocked(parentPathParts)
+            loadChildrenIfNeededLocked(parentState)
+            existingToDelete = parentState.children.remove(fileName)
+        }
 
-        val os = context.contentResolver.openOutputStream(targetFile.uri, "w")
+        // Perform slow SAF IPC file creation & streaming outside dirLock for parallel throughput
+        if (existingToDelete != null) {
+            runCatching { DocumentsContract.deleteDocument(resolver, existingToDelete.uri) }
+        }
+
+        val targetUri = createDocumentCompat(
+            parentUri = parentState.uri,
+            mimeType = "application/octet-stream",
+            displayName = fileName
+        ) ?: throw IOException("Failed to create output file: $normalized")
+
+        synchronized(dirLock) {
+            parentState.children[fileName] = SafChildNode(targetUri, isDirectory = false)
+        }
+
+        val os = resolver.openOutputStream(targetUri, "w")
             ?: throw IOException("Failed to open output stream for: $normalized")
         os.use { stream ->
             writer(stream)
-            stream.flush()
         }
     }
 
-    private fun ensureDirectory(segments: List<String>): DocumentFile {
-        if (segments.isEmpty()) return rootDir
-        var current = rootDir
-        val pathBuilder = StringBuilder()
+    private fun ensureDirectoryLocked(segments: List<String>): SafDirState {
+        var currentKey = ""
+        var currentState = dirStates.getValue("")
+
         for (segment in segments) {
-            if (pathBuilder.isNotEmpty()) pathBuilder.append('/')
-            pathBuilder.append(segment)
-            val key = pathBuilder.toString()
-            val cached = dirCache[key]
+            val nextKey = if (currentKey.isEmpty()) segment else "$currentKey/$segment"
+            val cached = dirStates[nextKey]
             if (cached != null) {
-                current = cached
+                currentState = cached
+                currentKey = nextKey
+                continue
+            }
+
+            loadChildrenIfNeededLocked(currentState)
+            val existingChild = currentState.children[segment]
+            val nextState = if (existingChild != null && existingChild.isDirectory) {
+                SafDirState(existingChild.uri, childrenLoaded = false)
             } else {
-                val next = current.findFile(segment)?.takeIf { it.isDirectory }
-                    ?: current.createDirectory(segment)
-                    ?: throw IOException("Unable to create directory '$segment' in output tree")
-                dirCache[key] = next
-                current = next
+                if (existingChild != null) {
+                    runCatching { DocumentsContract.deleteDocument(resolver, existingChild.uri) }
+                }
+                val newDirUri = createDocumentCompat(
+                    parentUri = currentState.uri,
+                    mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+                    displayName = segment
+                ) ?: throw IOException("Unable to create directory '$segment' in output tree")
+                currentState.children[segment] = SafChildNode(newDirUri, isDirectory = true)
+                SafDirState(newDirUri, childrenLoaded = true)
+            }
+            dirStates[nextKey] = nextState
+            currentState = nextState
+            currentKey = nextKey
+        }
+        return currentState
+    }
+
+    private fun loadChildrenIfNeededLocked(state: SafDirState) {
+        if (state.childrenLoaded) return
+        state.childrenLoaded = true
+
+        val queried = runCatching {
+            val docId = DocumentsContract.getDocumentId(state.uri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeRootUri, docId)
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            )
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                while (cursor.moveToNext()) {
+                    val childId = if (idCol >= 0) cursor.getString(idCol) else null
+                    val childName = if (nameCol >= 0) cursor.getString(nameCol) else null
+                    val mime = if (mimeCol >= 0) cursor.getString(mimeCol) else null
+                    if (!childId.isNullOrBlank() && !childName.isNullOrBlank()) {
+                        val childUri = DocumentsContract.buildDocumentUriUsingTree(treeRootUri, childId)
+                        val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
+                        state.children[childName] = SafChildNode(childUri, isDir)
+                    }
+                }
+                true
+            } ?: false
+        }.getOrDefault(false)
+
+        if (!queried) {
+            val fallbackDoc = DocumentFile.fromTreeUri(context, state.uri) ?: return
+            for (child in fallbackDoc.listFiles()) {
+                val name = child.name ?: continue
+                state.children[name] = SafChildNode(child.uri, child.isDirectory)
             }
         }
-        return current
+    }
+
+    private fun createDocumentCompat(parentUri: Uri, mimeType: String, displayName: String): Uri? {
+        return runCatching {
+            DocumentsContract.createDocument(resolver, parentUri, mimeType, displayName)
+        }.getOrNull() ?: run {
+            val doc = DocumentFile.fromTreeUri(context, parentUri) ?: return null
+            if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                doc.createDirectory(displayName)?.uri
+            } else {
+                doc.createFile(mimeType, displayName)?.uri
+            }
+        }
     }
 }

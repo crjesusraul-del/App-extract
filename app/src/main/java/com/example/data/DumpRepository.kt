@@ -10,6 +10,9 @@ import com.example.core.crypto.KeySet
 import com.example.core.crypto.KeyValidationSummary
 import com.example.core.io.SafSeekableSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
@@ -68,95 +71,105 @@ class DumpRepository(
         // Deduplicate by URI string
         val uniqueFiles = collectedFiles.distinctBy { it.first.uri.toString() }
 
-        val baseEntries = mutableListOf<Pair<IndexedGame, String>>() // game, baseTid
-        val updateEntries = mutableListOf<Pair<AttachedUpdate, String>>() // update, baseTid
-        val unsupported = mutableListOf<UnsupportedFileEntry>()
+        val baseEntries = java.util.Collections.synchronizedList(mutableListOf<Pair<IndexedGame, String>>())
+        val updateEntries = java.util.Collections.synchronizedList(mutableListOf<Pair<AttachedUpdate, String>>())
+        val unsupported = java.util.Collections.synchronizedList(mutableListOf<UnsupportedFileEntry>())
+        val scanUsable = keys.summarize().isUsableForExtraction
+        val scanSem = Semaphore(4)
 
-        for ((doc, isLoose, fileSize) in uniqueFiles) {
-            val name = doc.name ?: "unknown"
-            val unsupportedExtReason = DumpProcessor.unsupportedReasonForName(name)
-            if (unsupportedExtReason != null) {
-                unsupported += UnsupportedFileEntry(
-                    fileName = name,
-                    uriString = doc.uri.toString(),
-                    reason = unsupportedExtReason,
-                    fileSizeBytes = fileSize
-                )
-                continue
-            }
-
-            val format = DumpProcessor.detectFormatByName(name) ?: continue
-            if (!keys.summarize().isUsableForExtraction) {
-                unsupported += UnsupportedFileEntry(
-                    fileName = name,
-                    uriString = doc.uri.toString(),
-                    reason = "Cannot decrypt header: valid prod.keys with header_key is required.",
-                    fileSizeBytes = fileSize
-                )
-                continue
-            }
-
-            try {
-                val inspected: InspectedDump = SafSeekableSource.open(context.contentResolver, doc.uri).use { src ->
-                    DumpProcessor.inspect(src, name, keys)
-                }
-
-                if (inspected.isDlc) {
-                    unsupported += UnsupportedFileEntry(
-                        fileName = name,
-                        uriString = doc.uri.toString(),
-                        reason = "DLC (AddOnContent) extraction is not supported.",
-                        fileSizeBytes = fileSize
-                    )
-                    continue
-                }
-
-                if (inspected.isUpdatePatch) {
-                    updateEntries += AttachedUpdate(
-                        uriString = doc.uri.toString(),
-                        fileName = name,
-                        format = inspected.format,
-                        titleIdHex = inspected.titleIdHex,
-                        displayVersion = inspected.displayVersion,
-                        versionCode = inspected.versionCode,
-                        fileSizeBytes = fileSize,
-                        hasBktr = inspected.hasBktr,
-                        isLooseFile = isLoose
-                    ) to inspected.baseTitleIdHex
-                } else {
-                    val iconPath = inspected.iconBytes?.let {
-                        SafStorageHelper.saveIconToCache(context, inspected.baseTitleIdHex, it)
+        coroutineScope {
+            val tasks = uniqueFiles.map { (doc, isLoose, fileSize) ->
+                async(Dispatchers.IO) {
+                    val name = doc.name ?: "unknown"
+                    val unsupportedExtReason = DumpProcessor.unsupportedReasonForName(name)
+                    if (unsupportedExtReason != null) {
+                        unsupported += UnsupportedFileEntry(
+                            fileName = name,
+                            uriString = doc.uri.toString(),
+                            reason = unsupportedExtReason,
+                            fileSizeBytes = fileSize
+                        )
+                        return@async
                     }
-                    baseEntries += IndexedGame(
-                        id = doc.uri.toString(),
-                        uriString = doc.uri.toString(),
-                        fileName = name,
-                        format = inspected.format,
-                        titleIdHex = inspected.baseTitleIdHex,
-                        titleName = inspected.titleName,
-                        publisher = inspected.publisher,
-                        displayVersion = inspected.displayVersion,
-                        versionCode = inspected.versionCode,
-                        fileSizeBytes = fileSize,
-                        hasExeFs = inspected.hasExeFs,
-                        hasRomFs = inspected.hasRomFs,
-                        exeFsSizeBytes = inspected.exeFsSizeBytes,
-                        romFsSizeBytes = inspected.romFsSizeBytes,
-                        iconCachePath = iconPath,
-                        ncaSummary = inspected.ncaSummary,
-                        matchedUpdates = emptyList(),
-                        isLooseFile = isLoose,
-                        isUpdateOnlyWithoutBase = false
-                    ) to inspected.baseTitleIdHex
+
+                    DumpProcessor.detectFormatByName(name) ?: return@async
+                    if (!scanUsable) {
+                        unsupported += UnsupportedFileEntry(
+                            fileName = name,
+                            uriString = doc.uri.toString(),
+                            reason = "Cannot decrypt header: valid prod.keys with header_key is required.",
+                            fileSizeBytes = fileSize
+                        )
+                        return@async
+                    }
+
+                    scanSem.acquire()
+                    try {
+                        val inspected: InspectedDump = SafSeekableSource.open(context.contentResolver, doc.uri).use { src ->
+                            DumpProcessor.inspect(src, name, keys)
+                        }
+
+                        if (inspected.isDlc) {
+                            unsupported += UnsupportedFileEntry(
+                                fileName = name,
+                                uriString = doc.uri.toString(),
+                                reason = "DLC (AddOnContent) extraction is not supported.",
+                                fileSizeBytes = fileSize
+                            )
+                            return@async
+                        }
+
+                        if (inspected.isUpdatePatch) {
+                            updateEntries += AttachedUpdate(
+                                uriString = doc.uri.toString(),
+                                fileName = name,
+                                format = inspected.format,
+                                titleIdHex = inspected.titleIdHex,
+                                displayVersion = inspected.displayVersion,
+                                versionCode = inspected.versionCode,
+                                fileSizeBytes = fileSize,
+                                hasBktr = inspected.hasBktr,
+                                isLooseFile = isLoose
+                            ) to inspected.baseTitleIdHex
+                        } else {
+                            val iconPath = inspected.iconBytes?.let {
+                                SafStorageHelper.saveIconToCache(context, inspected.baseTitleIdHex, it)
+                            }
+                            baseEntries += IndexedGame(
+                                id = doc.uri.toString(),
+                                uriString = doc.uri.toString(),
+                                fileName = name,
+                                format = inspected.format,
+                                titleIdHex = inspected.baseTitleIdHex,
+                                titleName = inspected.titleName,
+                                publisher = inspected.publisher,
+                                displayVersion = inspected.displayVersion,
+                                versionCode = inspected.versionCode,
+                                fileSizeBytes = fileSize,
+                                hasExeFs = inspected.hasExeFs,
+                                hasRomFs = inspected.hasRomFs,
+                                exeFsSizeBytes = inspected.exeFsSizeBytes,
+                                romFsSizeBytes = inspected.romFsSizeBytes,
+                                iconCachePath = iconPath,
+                                ncaSummary = inspected.ncaSummary,
+                                matchedUpdates = emptyList(),
+                                isLooseFile = isLoose,
+                                isUpdateOnlyWithoutBase = false
+                            ) to inspected.baseTitleIdHex
+                        }
+                    } catch (e: Exception) {
+                        unsupported += UnsupportedFileEntry(
+                            fileName = name,
+                            uriString = doc.uri.toString(),
+                            reason = e.message ?: "Failed to parse dump",
+                            fileSizeBytes = fileSize
+                        )
+                    } finally {
+                        scanSem.release()
+                    }
                 }
-            } catch (e: Exception) {
-                unsupported += UnsupportedFileEntry(
-                    fileName = name,
-                    uriString = doc.uri.toString(),
-                    reason = e.message ?: "Failed to parse dump",
-                    fileSizeBytes = fileSize
-                )
             }
+            tasks.forEach { it.await() }
         }
 
         val updatesByBase = updateEntries.groupBy({ it.second }, { it.first })
@@ -227,11 +240,13 @@ class DumpRepository(
         }
         val targetFolderName = "${safeTitleFolder} [${request.game.titleIdHex}]$versionSuffix"
 
-        val gameOutDir = outputRoot.findFile(targetFolderName)?.takeIf { it.isDirectory }
+        val existingDir = outputRoot.findFile(targetFolderName)?.takeIf { it.isDirectory }
+        val isNewDir = existingDir == null
+        val gameOutDir = existingDir
             ?: outputRoot.createDirectory(targetFolderName)
             ?: throw IOException("Failed to create output folder '$targetFolderName'")
 
-        val sink = SafExtractionSink(context, gameOutDir)
+        val sink = SafExtractionSink(context, gameOutDir, assumeRootEmpty = isNewDir)
         val baseUri = Uri.parse(request.game.uriString)
         val updateUri = if (request.mergeUpdate) request.selectedUpdate?.uriString?.let { Uri.parse(it) } else null
 

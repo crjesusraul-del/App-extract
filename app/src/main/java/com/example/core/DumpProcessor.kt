@@ -5,7 +5,6 @@ import com.example.core.crypto.SwitchCrypto
 import com.example.core.formats.CnmtMetadata
 import com.example.core.formats.CnmtParser
 import com.example.core.formats.ContentMetaType
-import com.example.core.formats.Hfs0Container
 import com.example.core.formats.NacpMetadata
 import com.example.core.formats.NacpParser
 import com.example.core.formats.NcaContentType
@@ -16,14 +15,24 @@ import com.example.core.formats.RomFsReader
 import com.example.core.formats.TicketParser
 import com.example.core.formats.XciContainer
 import com.example.core.io.BinaryUtils
+import com.example.core.io.BufferedSeekableSource
 import com.example.core.io.SeekableSource
 import com.example.data.DumpFormat
 import com.example.data.ExtractionTarget
 import java.io.IOException
 import java.io.OutputStream
 import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.Semaphore
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 interface ExtractionSink {
+    val supportsParallelWrites: Boolean get() = false
     fun writeFile(relativePath: String, totalSize: Long, writer: (OutputStream) -> Unit)
 }
 
@@ -54,7 +63,11 @@ data class ExtractionProgressCallback(
 
 object DumpProcessor {
 
-    private const val COPY_BUFFER_SIZE = 256 * 1024
+    private const val COPY_BUFFER_SIZE = 2 * 1024 * 1024
+    private const val READ_AHEAD_WINDOW_SIZE = 1024 * 1024
+    private const val SMALL_FILE_THRESHOLD = 512L * 1024L
+    private const val WRITER_POOL_THREADS = 4
+    private const val MAX_IN_FLIGHT_SMALL_FILES = 24
 
     fun detectFormatByName(fileName: String): DumpFormat? {
         val lower = fileName.lowercase(Locale.US)
@@ -206,7 +219,7 @@ object DumpProcessor {
             null
         }
 
-        // Select ExeFS source (if update provides a full ExeFS PFS0, prefer update's ExeFS!)
+        // Select ExeFS source (if update provides a full ExeFS PFS0, prefer update's ExeFS)
         val exeFsNca = if (extractExeFs && baseProgram != null) {
             val updExe = updateProgram?.takeIf { nca -> nca.sections.any { it.fsType == NcaFsType.PFS0 } }
             updExe ?: baseProgram
@@ -216,15 +229,18 @@ object DumpProcessor {
         val baseRomFsSection = baseProgram?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }
         val updateRomFsSection = updateProgram?.sections?.firstOrNull { it.fsType == NcaFsType.ROMFS }
 
-        // Pre-scan entries to compute accurate total file counts and byte totals
         val exeFsPfs0 = if (extractExeFs && exeFsNca != null && exeFsSection != null) {
             callbacks.onPhase("Indexing ExeFS partition...")
-            Pfs0Container.parse(exeFsNca.openSectionFilesystemSlice(exeFsSection, keys))
+            val exeSlice = BufferedSeekableSource(
+                exeFsNca.openSectionFilesystemSlice(exeFsSection, keys),
+                windowSize = READ_AHEAD_WINDOW_SIZE
+            )
+            Pfs0Container.parse(exeSlice)
         } else null
 
         val romFsReader = if (extractRomFs && baseProgram != null) {
             callbacks.onPhase(if (updateRomFsSection != null) "Indexing merged BKTR RomFS..." else "Indexing RomFS...")
-            val romSource = when {
+            val rawRomSource = when {
                 updateProgram != null && updateRomFsSection != null && updateRomFsSection.hasBktr -> {
                     val baseSec = baseRomFsSection
                         ?: throw IOException("Base dump has no RomFS section to apply BKTR patch onto.")
@@ -239,7 +255,8 @@ object DumpProcessor {
                 }
                 else -> throw IOException("No RomFS section found in dump.")
             }
-            RomFsReader.parse(romSource)
+            val bufferedRomSource = BufferedSeekableSource(rawRomSource, windowSize = READ_AHEAD_WINDOW_SIZE)
+            RomFsReader.parse(bufferedRomSource)
         } else null
 
         val rawNcaPlan = if (extractNcas) {
@@ -262,6 +279,42 @@ object DumpProcessor {
             throw IOException("Selected target ($target) contains 0 extractable files.")
         }
 
+        if (sink.supportsParallelWrites) {
+            extractParallel(
+                rawNcaPlan = rawNcaPlan,
+                exeFsPfs0 = exeFsPfs0,
+                romFsReader = romFsReader,
+                totalFiles = totalFiles,
+                totalBytes = totalBytes,
+                updateRomFsActive = updateRomFsSection != null,
+                sink = sink,
+                callbacks = callbacks
+            )
+        } else {
+            extractSequential(
+                rawNcaPlan = rawNcaPlan,
+                exeFsPfs0 = exeFsPfs0,
+                romFsReader = romFsReader,
+                totalFiles = totalFiles,
+                totalBytes = totalBytes,
+                updateRomFsActive = updateRomFsSection != null,
+                sink = sink,
+                callbacks = callbacks
+            )
+        }
+    }
+
+    private fun extractSequential(
+        rawNcaPlan: List<Pair<String, SeekableSource>>,
+        exeFsPfs0: Pfs0Container?,
+        romFsReader: RomFsReader?,
+        totalFiles: Int,
+        totalBytes: Long,
+        updateRomFsActive: Boolean,
+        sink: ExtractionSink,
+        callbacks: ExtractionProgressCallback
+    ) {
+        val copyBuf = ByteArray(COPY_BUFFER_SIZE)
         var filesDone = 0
         var bytesDone = 0L
 
@@ -271,7 +324,7 @@ object DumpProcessor {
                 if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")
                 callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                 sink.writeFile(outPath, ncaSrc.length) { os ->
-                    copyFromSeekable(ncaSrc, os, ncaSrc.length, callbacks) { delta ->
+                    copyFromSeekable(ncaSrc, os, ncaSrc.length, copyBuf, callbacks) { delta ->
                         bytesDone += delta
                         callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                     }
@@ -289,7 +342,7 @@ object DumpProcessor {
                 callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                 val entrySource = exeFsPfs0.openEntry(entry)
                 sink.writeFile(outPath, entry.size) { os ->
-                    copyFromSeekable(entrySource, os, entry.size, callbacks) { delta ->
+                    copyFromSeekable(entrySource, os, entry.size, copyBuf, callbacks) { delta ->
                         bytesDone += delta
                         callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                     }
@@ -300,14 +353,15 @@ object DumpProcessor {
         }
 
         if (romFsReader != null) {
-            callbacks.onPhase(if (updateRomFsSection != null) "Extracting Merged RomFS..." else "Extracting RomFS...")
-            for (entry in romFsReader.files) {
+            callbacks.onPhase(if (updateRomFsActive) "Extracting Merged RomFS..." else "Extracting RomFS...")
+            val orderedFiles = romFsReader.files.sortedBy { it.dataOffset }
+            for (entry in orderedFiles) {
                 if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")
                 val outPath = "romfs/${entry.relativePath.trimStart('/')}"
                 callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                 val entrySource = romFsReader.openFileSource(entry)
                 sink.writeFile(outPath, entry.size) { os ->
-                    copyFromSeekable(entrySource, os, entry.size, callbacks) { delta ->
+                    copyFromSeekable(entrySource, os, entry.size, copyBuf, callbacks) { delta ->
                         bytesDone += delta
                         callbacks.onFileProgress(outPath, filesDone, totalFiles, bytesDone, totalBytes)
                     }
@@ -318,14 +372,190 @@ object DumpProcessor {
         }
     }
 
+    /**
+     * Multi-core pipelined extraction optimized for 8-core SoCs & UFS 2.2 storage:
+     * - Small files (<= 512 KB) are pre-read sequentially in RAM from the 1 MB read-ahead window
+     *   and dispatched across 4 concurrent SAF writer threads to hide Binder/FUSE IPC latency.
+     * - Large files (> 512 KB) stream through a 2-slot double-buffered async pipe (2 MB chunks)
+     *   so AES-CTR decryption and UFS 2.2 writes overlap on separate CPU cores.
+     */
+    private fun extractParallel(
+        rawNcaPlan: List<Pair<String, SeekableSource>>,
+        exeFsPfs0: Pfs0Container?,
+        romFsReader: RomFsReader?,
+        totalFiles: Int,
+        totalBytes: Long,
+        updateRomFsActive: Boolean,
+        sink: ExtractionSink,
+        callbacks: ExtractionProgressCallback
+    ) {
+        val threadCounter = AtomicInteger(0)
+        val writerPool = Executors.newFixedThreadPool(WRITER_POOL_THREADS) { r ->
+            Thread(r, "nxdump-io-${threadCounter.incrementAndGet()}").apply { isDaemon = true }
+        }
+        val inFlightPermits = Semaphore(MAX_IN_FLIGHT_SMALL_FILES)
+        val pendingFutures = ArrayDeque<Future<*>>(64)
+        val firstError = AtomicReference<Throwable?>(null)
+        val filesDoneCounter = AtomicInteger(0)
+        val bytesDoneCounter = AtomicLong(0L)
+
+        fun checkStatus() {
+            firstError.get()?.let { throw it }
+            if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")
+        }
+
+        fun drainWriters() {
+            while (pendingFutures.isNotEmpty()) {
+                pendingFutures.removeFirst().get()
+            }
+            checkStatus()
+        }
+
+        fun submitSmallFile(outPath: String, src: SeekableSource, size: Long) {
+            checkStatus()
+            val payload = if (size == 0L) ByteArray(0) else src.readFully(0, size.toInt())
+            inFlightPermits.acquire()
+            val future = writerPool.submit(Callable {
+                try {
+                    if (callbacks.isCancelled() || firstError.get() != null) return@Callable
+                    sink.writeFile(outPath, size) { os ->
+                        if (payload.isNotEmpty()) os.write(payload)
+                    }
+                    val doneFiles = filesDoneCounter.incrementAndGet()
+                    val doneBytes = bytesDoneCounter.addAndGet(size)
+                    callbacks.onFileProgress(outPath, doneFiles, totalFiles, doneBytes, totalBytes)
+                } catch (t: Throwable) {
+                    firstError.compareAndSet(null, t)
+                } finally {
+                    inFlightPermits.release()
+                }
+            })
+            pendingFutures.addLast(future)
+            if (pendingFutures.size >= 48) {
+                while (pendingFutures.size > 16) {
+                    pendingFutures.removeFirst().get()
+                }
+                checkStatus()
+            }
+        }
+
+        fun writeLargeFileDoubleBuffered(outPath: String, src: SeekableSource, size: Long) {
+            drainWriters()
+            val freeBuffers = ArrayBlockingQueue<ByteArray>(2).apply {
+                put(ByteArray(COPY_BUFFER_SIZE))
+                put(ByteArray(COPY_BUFFER_SIZE))
+            }
+            val filledQueue = ArrayBlockingQueue<Pair<ByteArray, Int>>(2)
+            val writerError = AtomicReference<Throwable?>(null)
+
+            val writerFuture = writerPool.submit(Callable {
+                try {
+                    sink.writeFile(outPath, size) { os ->
+                        while (true) {
+                            val (buf, len) = filledQueue.take()
+                            if (len < 0) break
+                            os.write(buf, 0, len)
+                            freeBuffers.put(buf)
+                            val curBytes = bytesDoneCounter.addAndGet(len.toLong())
+                            callbacks.onFileProgress(
+                                outPath,
+                                filesDoneCounter.get(),
+                                totalFiles,
+                                curBytes,
+                                totalBytes
+                            )
+                        }
+                    }
+                } catch (t: Throwable) {
+                    writerError.compareAndSet(null, t)
+                    // Unblock producer if waiting on freeBuffers
+                    freeBuffers.offer(ByteArray(0))
+                }
+            })
+
+            try {
+                var offset = 0L
+                while (offset < size) {
+                    if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")
+                    writerError.get()?.let { throw it }
+
+                    val buf = freeBuffers.take()
+                    if (buf.isEmpty()) {
+                        writerError.get()?.let { throw it }
+                        throw IOException("Writer aborted unexpectedly")
+                    }
+                    val toRead = minOf(buf.size.toLong(), size - offset).toInt()
+                    var readTotal = 0
+                    while (readTotal < toRead) {
+                        val n = src.readAt(offset + readTotal, buf, readTotal, toRead - readTotal)
+                        if (n <= 0) break
+                        readTotal += n
+                    }
+                    if (readTotal <= 0) {
+                        freeBuffers.offer(buf)
+                        break
+                    }
+                    offset += readTotal
+                    filledQueue.put(buf to readTotal)
+                }
+                filledQueue.put(ByteArray(0) to -1)
+                writerFuture.get()
+                writerError.get()?.let { throw it }
+                val doneFiles = filesDoneCounter.incrementAndGet()
+                callbacks.onFileProgress(outPath, doneFiles, totalFiles, bytesDoneCounter.get(), totalBytes)
+            } catch (t: Throwable) {
+                filledQueue.offer(ByteArray(0) to -1)
+                runCatching { writerFuture.get() }
+                throw t
+            }
+        }
+
+        fun dispatchEntry(outPath: String, src: SeekableSource, size: Long) {
+            if (size <= SMALL_FILE_THRESHOLD) {
+                submitSmallFile(outPath, src, size)
+            } else {
+                writeLargeFileDoubleBuffered(outPath, src, size)
+            }
+        }
+
+        try {
+            if (rawNcaPlan.isNotEmpty()) {
+                callbacks.onPhase("Extracting raw NCAs...")
+                for ((outPath, ncaSrc) in rawNcaPlan) {
+                    dispatchEntry(outPath, ncaSrc, ncaSrc.length)
+                }
+            }
+
+            if (exeFsPfs0 != null) {
+                callbacks.onPhase("Extracting ExeFS...")
+                for (entry in exeFsPfs0.entries) {
+                    dispatchEntry("exefs/${entry.name}", exeFsPfs0.openEntry(entry), entry.size)
+                }
+            }
+
+            if (romFsReader != null) {
+                callbacks.onPhase(if (updateRomFsActive) "Extracting Merged RomFS..." else "Extracting RomFS...")
+                val orderedFiles = romFsReader.files.sortedBy { it.dataOffset }
+                for (entry in orderedFiles) {
+                    val outPath = "romfs/${entry.relativePath.trimStart('/')}"
+                    dispatchEntry(outPath, romFsReader.openFileSource(entry), entry.size)
+                }
+            }
+
+            drainWriters()
+        } finally {
+            writerPool.shutdownNow()
+        }
+    }
+
     private fun copyFromSeekable(
         source: SeekableSource,
         os: OutputStream,
         totalLen: Long,
+        buf: ByteArray,
         callbacks: ExtractionProgressCallback,
         onBytesDelta: (Long) -> Unit
     ) {
-        val buf = ByteArray(COPY_BUFFER_SIZE)
         var offset = 0L
         while (offset < totalLen) {
             if (callbacks.isCancelled()) throw InterruptedException("Extraction cancelled")

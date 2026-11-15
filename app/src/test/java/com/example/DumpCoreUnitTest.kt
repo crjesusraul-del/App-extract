@@ -296,6 +296,86 @@ class DumpCoreUnitTest {
         assertEquals(2, parsedRsa4k.keyGeneration)
     }
 
+    @Test
+    fun `AesCtrSeekableSource and BufferedSeekableSource match ECB CTR across unaligned large reads`() {
+        val key = ByteArray(16) { (it * 7 + 3).toByte() }
+        val nonce = byteArrayOf(0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88.toByte())
+        val baseOff = 0x10400L
+        val plain = ByteArray(150_003) { ((it * 31) xor (it ushr 7)).toByte() }
+        val cipherBytes = encryptCtrSection(plain, key, nonce, baseOff)
+
+        val ctrSrc = com.example.core.crypto.AesCtrSeekableSource(
+            underlying = ByteArraySeekableSource(cipherBytes),
+            key = key,
+            sectionCtrNonce = nonce,
+            ctrBaseOffsetInNca = baseOff
+        )
+        val buffered = com.example.core.io.BufferedSeekableSource(ctrSrc, windowSize = 32 * 1024)
+
+        // Unaligned small read inside first sector
+        val slice1 = buffered.readFully(13L, 127)
+        assertArrayEquals(plain.copyOfRange(13, 140), slice1)
+
+        // Unaligned cross-window read near EOF
+        val slice2 = buffered.readFully(100_005L, 49_998)
+        assertArrayEquals(plain.copyOfRange(100_005, 150_003), slice2)
+    }
+
+    @Test
+    fun `parallel extraction extracts large file and small files cleanly`() {
+        val headerKey = ByteArray(32) { (it + 9).toByte() }
+        val keyAreaKey00 = ByteArray(16) { (it + 0x24).toByte() }
+        val plainSectionKey = ByteArray(16) { (it + 0x61).toByte() }
+        val keys = KeySet(
+            headerKey = headerKey,
+            keyAreaKeyApplication = mapOf(0 to keyAreaKey00),
+            rawKeyCount = 2
+        )
+
+        val smallData = "SMALL_EXEF_DATA".toByteArray()
+        val bigData = ByteArray(1_200_000) { ((it * 17) xor (it ushr 9)).toByte() }
+        val exeFsPfs0 = buildPfs0(listOf("small.bin" to smallData, "big.bin" to bigData))
+        val romData = "ROM_PAR_DATA".toByteArray()
+        val romFsBytes = buildMinimalRomFs("sub", "asset.bin", romData)
+
+        val ncaBytes = buildSyntheticNca(
+            contentType = NcaContentType.PROGRAM,
+            titleId = 0x0100555500001000L,
+            headerKey = headerKey,
+            keyAreaKey00 = keyAreaKey00,
+            plainSectionKey = plainSectionKey,
+            pfs0Section = exeFsPfs0,
+            romFsSection = romFsBytes
+        )
+        val nspBytes = buildPfs0(listOf("prog.nca" to ncaBytes))
+
+        val extracted = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+        val parallelSink = object : ExtractionSink {
+            override val supportsParallelWrites: Boolean = true
+            override fun writeFile(relativePath: String, totalSize: Long, writer: (OutputStream) -> Unit) {
+                val baos = ByteArrayOutputStream()
+                writer(baos)
+                extracted[relativePath] = baos.toByteArray()
+            }
+        }
+
+        DumpProcessor.extract(
+            baseSource = ByteArraySeekableSource(nspBytes),
+            baseFormat = DumpFormat.NSP,
+            updateSource = null,
+            updateFormat = null,
+            target = ExtractionTarget.ALL,
+            keys = keys,
+            sink = parallelSink,
+            callbacks = ExtractionProgressCallback({}, { _, _, _, _, _ -> }, { false })
+        )
+
+        assertArrayEquals(smallData, extracted["exefs/small.bin"])
+        assertArrayEquals(bigData, extracted["exefs/big.bin"])
+        assertArrayEquals(romData, extracted["romfs/sub/asset.bin"])
+        assertArrayEquals(ncaBytes, extracted["nca/prog.nca"])
+    }
+
     private fun buildTicket(
         sigType: Long,
         encryptedTitleKey: ByteArray,
